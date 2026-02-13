@@ -1,0 +1,6 @@
+---
+source: src/cli/ui/listen_view.rs
+assertion_line: 192
+expression: "ListenSummaryView::new(&summary, painter).to_string()"
+---
+Stopped: interrupted by user - received 5 notification(s)

@@ -1,0 +1,22 @@
+---
+source: src/cli/ui/listen_view.rs
+assertion_line: 168
+expression: "ListenReadyView::new(&dev, None, painter).to_string()"
+---
+Connected device:
+╭───────────┬───────────╮
+│ field     │ value     │
+├───────────┼───────────┤
+│ adapter   │ hci0      │
+│ device_id │ AA:BB:CC  │
+│ name      │ IDM-Clock │
+│ rssi      │ -43       │
+╰───────────┴───────────╯
+
+Listen session:
+╭──────────────┬────────────────────────────────────────────────────────────────────╮
+│ field        │ value                                                              │
+├──────────────┼────────────────────────────────────────────────────────────────────┤
+│ initial_read │ <none>                                                             │
+│ listening_on │ 0000fa03-0000-1000-8000-00805f9b34fb (iDotMatrix read/notify data) │
+╰──────────────┴────────────────────────────────────────────────────────────────────╯

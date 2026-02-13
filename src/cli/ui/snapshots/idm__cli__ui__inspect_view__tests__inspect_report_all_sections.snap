@@ -1,0 +1,31 @@
+---
+source: src/cli/ui/inspect_view.rs
+assertion_line: 143
+expression: "InspectReportView::new(&report, painter).to_string()"
+---
+Connected device:
+╭───────────┬───────────╮
+│ field     │ value     │
+├───────────┼───────────┤
+│ adapter   │ hci0      │
+│ device_id │ AA:BB:CC  │
+│ name      │ IDM-Clock │
+│ rssi      │ -43       │
+╰───────────┴───────────╯
+
+Expected iDotMatrix endpoints:
+╭──────────────────────────────────────┬────────────────┬─────────────────────────────┬─────────╮
+│ uuid                                 │ kind           │ name                        │ status  │
+├──────────────────────────────────────┼────────────────┼─────────────────────────────┼─────────┤
+│ 000000fa-0000-1000-8000-00805f9b34fb │ service        │ iDotMatrix control service  │ present │
+│ 0000fa02-0000-1000-8000-00805f9b34fb │ characteristic │ iDotMatrix write data       │ present │
+│ 0000fa03-0000-1000-8000-00805f9b34fb │ characteristic │ iDotMatrix read/notify data │ present │
+╰──────────────────────────────────────┴────────────────┴─────────────────────────────┴─────────╯
+
+Discovered GATT services:
+╭──────────────────────────────────────┬─────────┬──────────────────────────────────────┬─────────────╮
+│ service_uuid                         │ primary │ characteristic_uuid                  │ properties  │
+├──────────────────────────────────────┼─────────┼──────────────────────────────────────┼─────────────┤
+│ 000000fa-0000-1000-8000-00805f9b34fb │ yes     │ 0000fa02-0000-1000-8000-00805f9b34fb │ write       │
+│ 000000fa-0000-1000-8000-00805f9b34fb │ yes     │ 0000fa03-0000-1000-8000-00805f9b34fb │ read,notify │
+╰──────────────────────────────────────┴─────────┴──────────────────────────────────────┴─────────────╯

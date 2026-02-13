@@ -1,0 +1,11 @@
+---
+source: src/cli/ui/table.rs
+assertion_line: 72
+expression: table.to_string()
+---
+╭───────┬─────────────╮
+│ field │ value       │
+├───────┼─────────────┤
+│ host  │ example.com │
+│ port  │ 443         │
+╰───────┴─────────────╯

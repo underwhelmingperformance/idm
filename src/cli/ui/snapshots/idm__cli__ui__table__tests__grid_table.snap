@@ -1,0 +1,11 @@
+---
+source: src/cli/ui/table.rs
+assertion_line: 62
+expression: table.to_string()
+---
+╭───────┬───────╮
+│ name  │ value │
+├───────┼───────┤
+│ alpha │ 1     │
+│ beta  │ 2     │
+╰───────┴───────╯

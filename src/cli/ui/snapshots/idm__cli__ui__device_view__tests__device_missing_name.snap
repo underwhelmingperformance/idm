@@ -1,0 +1,13 @@
+---
+source: src/cli/ui/device_view.rs
+assertion_line: 66
+expression: "DeviceView::new(&dev, painter).to_string()"
+---
+╭───────────┬───────────╮
+│ field     │ value     │
+├───────────┼───────────┤
+│ adapter   │ hci0      │
+│ device_id │ AA:BB:CC  │
+│ name      │ <unknown> │
+│ rssi      │ -43       │
+╰───────────┴───────────╯
