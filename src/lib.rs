@@ -11,7 +11,7 @@ mod utils;
 
 pub use app::{
     SessionHandler, fake_hardware_client, real_hardware_client,
-    real_hardware_client_with_model_resolution, run_with_clients,
+    real_hardware_client_with_model_resolution, run, run_with_clients,
 };
 pub use cli::{
     Args, BrightnessArgs, ColourArgs, Command, ControlAction, ControlArgs, FakeArgs, ListenArgs,
@@ -33,4 +33,4 @@ pub use hw::{
 };
 pub use notification::{NotificationDecodeError, NotificationHandler, NotifyEvent};
 pub use protocol::EndpointId;
-pub use terminal::{SystemTerminalClient, TerminalClient};
+pub use terminal::TerminalClient;

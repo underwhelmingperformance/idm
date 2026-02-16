@@ -1,10 +1,7 @@
 use clap::Parser;
 use std::process::ExitCode;
 
-use idm::{
-    Args, SystemTerminalClient, fake_hardware_client, real_hardware_client_with_model_resolution,
-    run_with_clients,
-};
+use idm::{Args, fake_hardware_client, real_hardware_client_with_model_resolution, run};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -20,7 +17,7 @@ async fn main() -> ExitCode {
             None => real_hardware_client_with_model_resolution(model_resolution),
         };
 
-        run_with_clients(command, &mut stdout, &SystemTerminalClient, hardware_client).await
+        run(command, &mut stdout, hardware_client).await
     }
     .await;
 

@@ -1,8 +1,10 @@
 use std::io;
 
 use anyhow::Result;
+use owo_colors::OwoColorize;
+use tracing::instrument;
+use tracing_indicatif::span_ext::IndicatifSpanExt;
 
-use crate::cli::ui::Spinner;
 use crate::cli::{Command, FakeArgs};
 use crate::hw::{
     DeviceSession, HardwareClient, ModelResolutionConfig,
@@ -11,10 +13,10 @@ use crate::hw::{
     real_hardware_client_with_model_resolution as build_real_hardware_client_with_model_resolution,
 };
 use crate::telemetry;
-use crate::terminal::TerminalClient;
+use crate::terminal::{SystemTerminalClient, TerminalClient};
 
 const DEFAULT_DEVICE_NAME_PREFIX: &str = "IDM-";
-const CONNECTING_SPINNER_MESSAGE: &str = "Scanning for iDotMatrix devices and connecting...";
+const CONNECTING_PROGRESS_MESSAGE: &str = "Scanning for iDotMatrix devices and connecting";
 
 /// Creates a hardware client backed by the real BLE transport.
 #[must_use]
@@ -81,23 +83,27 @@ impl SessionHandler {
     /// # Errors
     ///
     /// Returns an error if discovery or connection fails.
-    pub async fn connect_first(
-        self,
-        terminal_client: &dyn TerminalClient,
-    ) -> Result<DeviceSession> {
-        let spinner = Spinner::new(terminal_client.stderr_is_terminal());
+    #[instrument(skip(self), level = "info", fields(name_prefix = %self.name_prefix))]
+    pub async fn connect_first(self) -> Result<DeviceSession> {
         let name_prefix = self.name_prefix;
         let hardware_client = self.hardware_client;
-
-        let session = spinner
-            .with_spinner(CONNECTING_SPINNER_MESSAGE, || async move {
-                hardware_client
-                    .connect_first_device(name_prefix.as_str())
-                    .await
-            })
-            .await?;
-
-        Ok(session)
+        let progress = tracing::Span::current();
+        progress.pb_set_message(CONNECTING_PROGRESS_MESSAGE);
+        match hardware_client
+            .connect_first_device(name_prefix.as_str())
+            .await
+        {
+            Ok(session) => {
+                let finish_message = format!("{} Connected", "✓".green());
+                progress.pb_set_finish_message(&finish_message);
+                Ok(session)
+            }
+            Err(error) => {
+                let finish_message = format!("{} Connection failed", "✗".red());
+                progress.pb_set_finish_message(&finish_message);
+                Err(error.into())
+            }
+        }
     }
 }
 
@@ -120,10 +126,27 @@ impl SessionHandler {
 ///     None => idm::real_hardware_client(),
 /// };
 /// let mut out = Vec::new();
-/// idm::run_with_clients(command, &mut out, &idm::SystemTerminalClient, hardware_client).await?;
+/// idm::run(command, &mut out, hardware_client).await?;
 /// # Ok(())
 /// # }
 /// ```
+///
+/// # Errors
+///
+/// Returns an error if tracing initialisation fails, BLE interaction fails, or
+/// output writing fails.
+pub async fn run<W>(
+    command: Command,
+    out: &mut W,
+    hardware_client: Box<dyn HardwareClient>,
+) -> Result<()>
+where
+    W: io::Write,
+{
+    run_with_clients(command, out, &SystemTerminalClient, hardware_client).await
+}
+
+/// Runs the CLI command with injected clients.
 ///
 /// # Errors
 ///
@@ -138,15 +161,13 @@ pub async fn run_with_clients<W>(
 where
     W: io::Write,
 {
-    telemetry::initialise_tracing("idm")?;
+    telemetry::initialise_tracing("idm", terminal_client.stderr_is_terminal())?;
 
     match command {
         Command::Inspect => crate::cli::inspect::run(hardware_client, out, terminal_client).await,
         Command::Listen(args) => {
             crate::cli::listen::run(hardware_client, &args, out, terminal_client).await
         }
-        Command::Control(args) => {
-            crate::cli::control::run(hardware_client, &args, out, terminal_client).await
-        }
+        Command::Control(args) => crate::cli::control::run(hardware_client, &args, out).await,
     }
 }

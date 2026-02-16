@@ -114,7 +114,7 @@ impl BtleplugBackend {
     }
 
     /// Scans indefinitely until the first matching peripheral appears, then connects.
-    #[instrument(skip(self), fields(prefix = name_prefix))]
+    #[instrument(skip(self), level = "debug", fields(prefix = name_prefix))]
     async fn find_and_connect_first_matching(
         &self,
         name_prefix: &str,
@@ -197,6 +197,7 @@ impl BtleplugBackend {
     }
 
     /// Connects to the first matching peripheral and prepares a session object.
+    #[instrument(skip(self), level = "debug", fields(prefix = name_prefix))]
     pub(crate) async fn connect_first_matching_device(
         self,
         name_prefix: &str,
@@ -268,7 +269,6 @@ impl BtleplugBackend {
                     negotiated_endpoints.gatt_profile,
                     negotiated_endpoints.endpoint_uuids.clone(),
                 );
-
         Ok(RealDeviceSession {
             device: connected.device,
             services,

@@ -5,7 +5,6 @@ use clap::{Args, Subcommand, ValueEnum};
 use time::OffsetDateTime;
 
 use crate::hw::HardwareClient;
-use crate::terminal::TerminalClient;
 use crate::{
     Brightness, BrightnessHandler, FullscreenColourHandler, PowerHandler, Rgb, ScreenPower,
     SessionHandler, TextUploadHandler, TextUploadRequest, TimeSyncHandler,
@@ -222,14 +221,11 @@ pub(crate) async fn run<W>(
     client: Box<dyn HardwareClient>,
     args: &ControlArgs,
     out: &mut W,
-    terminal_client: &dyn TerminalClient,
 ) -> Result<()>
 where
     W: io::Write,
 {
-    let session = SessionHandler::new(client)
-        .connect_first(terminal_client)
-        .await?;
+    let session = SessionHandler::new(client).connect_first().await?;
 
     let command_result = run_with_session(&session, args, out).await;
     let close_result = session.close().await;

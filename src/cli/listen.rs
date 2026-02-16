@@ -56,9 +56,7 @@ where
     W: io::Write,
 {
     let painter = Painter::new(terminal_client.stdout_is_terminal());
-    let session = crate::SessionHandler::new(client)
-        .connect_first(terminal_client)
-        .await?;
+    let session = crate::SessionHandler::new(client).connect_first().await?;
     let device = session.device().clone();
     let endpoint = EndpointId::ReadNotifyCharacteristic;
     let initial_read = match session.read_endpoint_optional(endpoint).await {

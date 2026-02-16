@@ -17,9 +17,7 @@ where
     W: io::Write,
 {
     let painter = Painter::new(terminal_client.stdout_is_terminal());
-    let session = crate::SessionHandler::new(client)
-        .connect_first(terminal_client)
-        .await?;
+    let session = crate::SessionHandler::new(client).connect_first().await?;
     let report = session.inspect_report();
     session.close().await?;
 
