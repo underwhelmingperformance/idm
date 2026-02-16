@@ -2,6 +2,7 @@ use std::fmt::{self, Display, Formatter};
 
 use crate::hw::InspectReport;
 use crate::protocol;
+use crate::utils::format_hex;
 
 use super::device_view::DeviceView;
 use super::painter::Painter;
@@ -41,6 +42,7 @@ impl<'a> InspectReportView<'a> {
     fn session_table(&self) -> Table {
         let metadata = self.report.session_metadata();
         let profile = metadata.device_profile();
+        let routing_profile = metadata.device_routing_profile();
         let gatt_profile = metadata.gatt_profile().map_or_else(
             || self.painter.warning("<unknown>"),
             |value| self.painter.value(value.to_string()),
@@ -119,6 +121,33 @@ impl<'a> InspectReportView<'a> {
                     self.painter.value(profile.panel_size().to_string()),
                 ),
                 (
+                    "profile_led_type",
+                    routing_profile
+                        .and_then(|value| value.led_type)
+                        .map_or_else(
+                            || self.painter.warning("<unknown>"),
+                            |value| self.painter.value(value.to_string()),
+                        ),
+                ),
+                (
+                    "profile_text_path",
+                    routing_profile
+                        .and_then(|value| value.text_path)
+                        .map_or_else(
+                            || self.painter.warning("<unknown>"),
+                            |value| self.painter.value(value.to_string()),
+                        ),
+                ),
+                (
+                    "profile_joint_mode",
+                    routing_profile
+                        .and_then(|value| value.joint_mode)
+                        .map_or_else(
+                            || self.painter.warning("<none>"),
+                            |value| self.painter.value(value.to_string()),
+                        ),
+                ),
+                (
                     "profile_image_upload_mode",
                     self.painter.value(profile.image_upload_mode().to_string()),
                 ),
@@ -191,6 +220,134 @@ impl<'a> InspectReportView<'a> {
             rows,
         )
     }
+
+    fn model_resolution_debug_table(&self) -> Option<Table> {
+        let debug = self.report.session_metadata().model_resolution_debug()?;
+        let scan_identity = debug.scan_identity();
+        let write_modes = debug.led_info_write_modes_attempted();
+        let scan_properties_debug = debug.scan_properties_debug();
+
+        Some(Table::key_value(
+            self.painter,
+            vec![
+                (
+                    "Scan identity present",
+                    if scan_identity.is_some() {
+                        self.painter.success("yes")
+                    } else {
+                        self.painter.warning("no")
+                    },
+                ),
+                (
+                    "Scan identity shape",
+                    scan_identity.map_or_else(
+                        || self.painter.warning("<none>"),
+                        |identity| self.painter.value(identity.shape.to_string()),
+                    ),
+                ),
+                (
+                    "Scan identity CID",
+                    scan_identity.map_or_else(
+                        || self.painter.warning("<none>"),
+                        |identity| self.painter.value(identity.cid.to_string()),
+                    ),
+                ),
+                (
+                    "Scan identity PID",
+                    scan_identity.map_or_else(
+                        || self.painter.warning("<none>"),
+                        |identity| self.painter.value(identity.pid.to_string()),
+                    ),
+                ),
+                (
+                    "CoreBluetooth manufacturer data",
+                    scan_properties_debug.map_or_else(
+                        || self.painter.warning("<none>"),
+                        |scan_debug| {
+                            if scan_debug.manufacturer_data().is_empty() {
+                                return self.painter.warning("<none>");
+                            }
+
+                            let rendered = scan_debug
+                                .manufacturer_data()
+                                .iter()
+                                .map(|record| {
+                                    format!(
+                                        "0x{:04X}={}",
+                                        record.company_id(),
+                                        format_hex(record.payload())
+                                    )
+                                })
+                                .collect::<Vec<_>>()
+                                .join(";");
+                            self.painter.value(rendered)
+                        },
+                    ),
+                ),
+                (
+                    "CoreBluetooth service data",
+                    scan_properties_debug.map_or_else(
+                        || self.painter.warning("<none>"),
+                        |scan_debug| {
+                            if scan_debug.service_data().is_empty() {
+                                return self.painter.warning("<none>");
+                            }
+
+                            let rendered = scan_debug
+                                .service_data()
+                                .iter()
+                                .map(|record| {
+                                    format!("{}={}", record.uuid(), format_hex(record.payload()))
+                                })
+                                .collect::<Vec<_>>()
+                                .join(";");
+                            self.painter.value(rendered)
+                        },
+                    ),
+                ),
+                (
+                    "CoreBluetooth services",
+                    scan_properties_debug.map_or_else(
+                        || self.painter.warning("<none>"),
+                        |scan_debug| {
+                            if scan_debug.service_uuids().is_empty() {
+                                return self.painter.warning("<none>");
+                            }
+                            self.painter.value(scan_debug.service_uuids().join(","))
+                        },
+                    ),
+                ),
+                (
+                    "LED-info query outcome",
+                    self.painter
+                        .value(debug.led_info_query_outcome().to_string()),
+                ),
+                (
+                    "LED-info write modes attempted",
+                    if write_modes.is_empty() {
+                        self.painter.warning("<none>")
+                    } else {
+                        self.painter.value(write_modes.join(","))
+                    },
+                ),
+                (
+                    "LED-info sync-time fallback attempted",
+                    if debug.led_info_sync_time_fallback_attempted() {
+                        self.painter.success("yes")
+                    } else {
+                        self.painter.warning("no")
+                    },
+                ),
+                (
+                    "LED-info last payload",
+                    debug.led_info_last_payload().map_or_else(
+                        || self.painter.warning("<none>"),
+                        |payload| self.painter.value(format_hex(payload)),
+                    ),
+                ),
+            ],
+        ))
+    }
 }
 
 impl Display for InspectReportView<'_> {
@@ -202,6 +359,11 @@ impl Display for InspectReportView<'_> {
         writeln!(f)?;
         write!(f, "\n{}", self.painter.heading("Session metadata:"))?;
         write!(f, "\n{}", self.session_table())?;
+        if let Some(table) = self.model_resolution_debug_table() {
+            writeln!(f)?;
+            write!(f, "\n{}", self.painter.heading("Model resolution debug:"))?;
+            write!(f, "\n{table}")?;
+        }
         writeln!(f)?;
         write!(
             f,

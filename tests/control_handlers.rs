@@ -78,3 +78,22 @@ async fn text_upload_handler_supports_notify_ack_pacing() -> anyhow::Result<()> 
     session.close().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn text_upload_rejects_unresolved_text_path_routing_profile() -> anyhow::Result<()> {
+    let fake_args = idm::FakeArgs::builder()
+        .scan_fixture("hci0|AA:BB:CC|IDM-Unknown|-43|5452007042010200010520002000")?
+        .build();
+    let client = idm::fake_hardware_client(fake_args);
+    let session = client.connect_first_device("IDM-").await?;
+
+    let result = idm::TextUploadHandler::upload(&session, idm::TextUploadRequest::new("Hi")).await;
+    assert_matches!(
+        result,
+        Err(idm::ProtocolError::TextUpload(error))
+            if matches!(*error, idm::TextUploadError::UnresolvedTextPath)
+    );
+
+    session.close().await?;
+    Ok(())
+}

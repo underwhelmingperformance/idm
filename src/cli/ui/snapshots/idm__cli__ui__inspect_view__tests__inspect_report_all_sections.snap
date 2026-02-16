@@ -1,6 +1,5 @@
 ---
 source: src/cli/ui/inspect_view.rs
-assertion_line: 276
 expression: "InspectReportView::new(&report, &painter).to_string()"
 ---
 Connected device:
@@ -27,6 +26,9 @@ Session metadata:
 │ resolved_write_characteristic_uuid    │ <unknown>   │
 │ resolved_read_notify_uuid             │ <unknown>   │
 │ profile_panel_size                    │ unknown     │
+│ profile_led_type                      │ <unknown>   │
+│ profile_text_path                     │ <unknown>   │
+│ profile_joint_mode                    │ <none>      │
 │ profile_image_upload_mode             │ png_file    │
 │ profile_gif_header                    │ timed       │
 │ profile_write_chunk_fallback          │ 512 bytes   │

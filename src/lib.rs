@@ -9,7 +9,10 @@ mod telemetry;
 mod terminal;
 mod utils;
 
-pub use app::{SessionHandler, fake_hardware_client, real_hardware_client, run_with_clients};
+pub use app::{
+    SessionHandler, fake_hardware_client, real_hardware_client,
+    real_hardware_client_with_model_resolution, run_with_clients,
+};
 pub use cli::{
     Args, BrightnessArgs, ColourArgs, Command, ControlAction, ControlArgs, FakeArgs, ListenArgs,
     PowerArgs, PowerState, SyncTimeArgs, TextArgs,
@@ -22,9 +25,11 @@ pub use handlers::{
     TextUploadRequest, TimeSyncHandler, UploadPacing, UploadReceipt,
 };
 pub use hw::{
-    CharacteristicInfo, DeviceProfile, DeviceSession, EndpointPresence, FoundDevice, GattProfile,
-    GifHeaderProfile, HardwareClient, ImageUploadMode, InspectReport, ListenStopReason,
-    ListenSummary, NotificationRunSummary, PanelSize, ServiceInfo, SessionMetadata, WriteMode,
+    AmbiguousShape, CharacteristicInfo, DeviceProfile, DeviceProfileResolver, DeviceRoutingProfile,
+    DeviceSession, EndpointPresence, FoundDevice, GattProfile, GifHeaderProfile, HardwareClient,
+    ImageUploadMode, InspectReport, LedInfoResponse, ListenStopReason, ListenSummary, ModelProfile,
+    ModelResolutionConfig, NotificationRunSummary, PanelSize, ScanIdentity, ScanModelHandler,
+    ServiceInfo, SessionMetadata, TextPath, WriteMode,
 };
 pub use notification::{NotificationDecodeError, NotificationHandler, NotifyEvent};
 pub use protocol::EndpointId;

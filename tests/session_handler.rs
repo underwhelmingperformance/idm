@@ -39,6 +39,7 @@ async fn fake_session_connect_populates_report_metadata() -> anyhow::Result<()> 
         idm::PanelSize::Unknown,
         report.session_metadata().device_profile().panel_size()
     );
+    assert_eq!(None, report.session_metadata().device_routing_profile());
     assert_eq!(
         514,
         report

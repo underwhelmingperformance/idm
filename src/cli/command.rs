@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::time::Duration;
 
 use bon::Builder;
@@ -5,8 +6,10 @@ use clap::{Parser, Subcommand};
 
 use crate::cli::control::ControlArgs;
 use crate::cli::listen::ListenArgs;
-use crate::error::{CliConfigError, FixtureError};
-use crate::hw::{FakeBackendConfig, HexPayload, NotificationPayloads, ScanFixture};
+use crate::error::CliConfigError;
+use crate::hw::{
+    FakeBackendConfig, HexPayload, ModelResolutionConfig, NotificationPayloads, ScanFixture,
+};
 
 /// Command-line options for the iDotMatrix BLE tool.
 #[derive(Debug, Parser)]
@@ -27,6 +30,12 @@ pub struct Args {
     /// Artificial fake scan delay (e.g. `250ms`, `2s`).
     #[arg(long, global = true, requires = "fake", value_parser = parse_duration)]
     fake_discovery_delay: Option<Duration>,
+    /// Explicit LED type override used to resolve ambiguous scan shapes.
+    #[arg(long, global = true, value_parser = parse_led_type)]
+    model_led_type: Option<u8>,
+    /// Path to the persisted model-overrides file.
+    #[arg(long, global = true)]
+    model_overrides_path: Option<PathBuf>,
     #[command(subcommand)]
     command: Command,
 }
@@ -49,6 +58,8 @@ impl Args {
             fake_read: None,
             fake_notifications: None,
             fake_discovery_delay: None,
+            model_led_type: None,
+            model_overrides_path: None,
             command,
         }
     }
@@ -61,6 +72,8 @@ impl Args {
             initial_read,
             notifications,
             discovery_delay,
+            model_led_type,
+            model_overrides_path,
         } = fake;
 
         self.fake = true;
@@ -68,7 +81,15 @@ impl Args {
         self.fake_read = initial_read;
         self.fake_notifications = notifications;
         self.fake_discovery_delay = Some(discovery_delay);
+        self.model_led_type = model_led_type;
+        self.model_overrides_path = model_overrides_path;
         self
+    }
+
+    /// Returns model-resolution options derived from CLI arguments.
+    #[must_use]
+    pub fn model_resolution(&self) -> ModelResolutionConfig {
+        ModelResolutionConfig::new(self.model_led_type, self.model_overrides_path.clone())
     }
 
     /// Splits parsed CLI arguments into command and optional fake-client settings.
@@ -83,6 +104,8 @@ impl Args {
             fake_read,
             fake_notifications,
             fake_discovery_delay,
+            model_led_type,
+            model_overrides_path,
             command,
         } = self;
 
@@ -95,6 +118,8 @@ impl Args {
                 initial_read: fake_read,
                 notifications: fake_notifications,
                 discovery_delay: fake_discovery_delay.unwrap_or(Duration::ZERO),
+                model_led_type,
+                model_overrides_path,
             })
         } else {
             None
@@ -107,14 +132,16 @@ impl Args {
 /// Fake backend arguments for programmatic runs.
 #[derive(Debug, Builder)]
 pub struct FakeArgs {
-    #[builder(with = |value: &str| -> std::result::Result<_, FixtureError> { value.parse() })]
+    #[builder(with = |value: &str| -> std::result::Result<_, crate::error::FixtureError> { value.parse() })]
     scan_fixture: ScanFixture,
-    #[builder(with = |value: &str| -> std::result::Result<_, FixtureError> { value.parse() })]
+    #[builder(with = |value: &str| -> std::result::Result<_, crate::error::FixtureError> { value.parse() })]
     initial_read: Option<HexPayload>,
-    #[builder(with = |value: &str| -> std::result::Result<_, FixtureError> { value.parse() })]
+    #[builder(with = |value: &str| -> std::result::Result<_, crate::error::FixtureError> { value.parse() })]
     notifications: Option<NotificationPayloads>,
     #[builder(default)]
     discovery_delay: Duration,
+    model_led_type: Option<u8>,
+    model_overrides_path: Option<PathBuf>,
 }
 
 impl FakeArgs {
@@ -124,6 +151,8 @@ impl FakeArgs {
             initial_read,
             notifications,
             discovery_delay,
+            model_led_type,
+            model_overrides_path,
         } = self;
 
         FakeBackendConfig::builder()
@@ -131,6 +160,10 @@ impl FakeArgs {
             .maybe_initial_read(initial_read)
             .maybe_notifications(notifications)
             .discovery_delay(discovery_delay)
+            .model_resolution(ModelResolutionConfig::new(
+                model_led_type,
+                model_overrides_path,
+            ))
             .build()
     }
 }
@@ -148,6 +181,14 @@ pub enum Command {
 
 fn parse_duration(value: &str) -> Result<Duration, String> {
     humantime::parse_duration(value).map_err(|error| error.to_string())
+}
+
+fn parse_led_type(value: &str) -> Result<u8, String> {
+    let parsed = value.parse::<u8>().map_err(|error| error.to_string())?;
+    if !matches!(parsed, 1 | 2 | 3 | 4 | 6 | 7 | 11) {
+        return Err("supported values are 1, 2, 3, 4, 6, 7, 11".to_string());
+    }
+    Ok(parsed)
 }
 
 #[cfg(test)]
@@ -203,5 +244,44 @@ mod tests {
             .expect("valid fake arguments should resolve fake settings");
         assert_matches!(command, Command::Inspect);
         assert_matches!(fake_args, Some(_));
+    }
+
+    #[test]
+    fn model_led_type_rejects_unsupported_value() {
+        let result = Args::try_parse_from([
+            "idm",
+            "--model-led-type",
+            "9",
+            "--fake",
+            "--fake-scan",
+            "hci0|AA:BB:CC|IDM-Clock|-43",
+            "inspect",
+        ]);
+
+        let error = result.expect_err("unsupported model-led-type should fail parsing");
+        assert_eq!(ErrorKind::ValueValidation, error.kind());
+    }
+
+    #[test]
+    fn model_args_are_exposed_via_model_resolution() {
+        let cli = Args::try_parse_from([
+            "idm",
+            "--model-led-type",
+            "2",
+            "--model-overrides-path",
+            "/tmp/idm-overrides.tsv",
+            "--fake",
+            "--fake-scan",
+            "hci0|AA:BB:CC|IDM-Clock|-43",
+            "inspect",
+        ])
+        .expect("model arguments should parse");
+
+        let model_resolution = cli.model_resolution();
+        assert_eq!(Some(2), model_resolution.led_type_override());
+        assert_eq!(
+            Some(std::path::Path::new("/tmp/idm-overrides.tsv")),
+            model_resolution.overrides_path()
+        );
     }
 }

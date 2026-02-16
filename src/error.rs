@@ -23,7 +23,17 @@ pub enum InteractionError {
     #[error("required iDotMatrix endpoints are missing: {missing}")]
     MissingRequiredEndpoints { missing: String },
     #[error("failed while waiting for Ctrl+C")]
-    CtrlC(#[from] std::io::Error),
+    CtrlC { source: std::io::Error },
+    #[error("failed while reading or writing model overrides")]
+    ModelOverrideIo { source: std::io::Error },
+    #[error("invalid persisted model-override record: `{record}`")]
+    InvalidModelOverrideRecord { record: String },
+    #[error("invalid LED type override value `{value}`")]
+    InvalidLedTypeOverride { value: u8 },
+    #[error(
+        "ambiguous model shape `{shape}` for device `{device_id}` is unresolved; pass --model-led-type or persist a choice in the model-overrides file"
+    )]
+    AmbiguousShapeSelectionRequired { device_id: String, shape: i8 },
     #[error(transparent)]
     Fixture(#[from] FixtureError),
 }
@@ -43,6 +53,8 @@ pub enum FixtureError {
     InvalidHexLength,
     #[error("hex payload contains invalid byte `{value}`")]
     InvalidHexByte { value: String },
+    #[error("scan model payload is not a valid iDotMatrix manufacturer payload")]
+    InvalidScanModelPayload,
 }
 
 /// Errors returned when validating runtime backend options.

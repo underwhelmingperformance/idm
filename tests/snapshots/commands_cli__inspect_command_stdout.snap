@@ -1,6 +1,5 @@
 ---
 source: tests/commands_cli.rs
-assertion_line: 45
 expression: stdout.trim_end()
 ---
 Connected device:
@@ -27,6 +26,9 @@ Session metadata:
 │ resolved_write_characteristic_uuid    │ 0000fa02-0000-1000-8000-00805f9b34fb │
 │ resolved_read_notify_uuid             │ 0000fa03-0000-1000-8000-00805f9b34fb │
 │ profile_panel_size                    │ unknown                              │
+│ profile_led_type                      │ <unknown>                            │
+│ profile_text_path                     │ <unknown>                            │
+│ profile_joint_mode                    │ <none>                               │
 │ profile_image_upload_mode             │ png_file                             │
 │ profile_gif_header                    │ timed                                │
 │ profile_write_chunk_fallback          │ 514 bytes                            │

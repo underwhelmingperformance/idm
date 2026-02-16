@@ -11,7 +11,9 @@ use super::model::{
     CharacteristicInfo, EndpointPresence, FoundDevice, InspectReport, ListenStopReason,
     NotificationRunSummary, ServiceInfo, SessionMetadata,
 };
-use super::profile::resolve_device_profile;
+use super::model_overrides::{ModelResolutionConfig, is_supported_led_type};
+use super::profile::{resolve_device_profile, resolve_device_routing_profile};
+use super::scan_model::ScanModelHandler;
 use super::session::{FA_SERVICE_UUID, FA_WRITE_UUID, negotiate_session_endpoints};
 use crate::error::{FixtureError, InteractionError};
 use crate::protocol::EndpointId;
@@ -75,6 +77,8 @@ pub(crate) struct FakeBackendConfig {
     initial_read: Option<HexPayload>,
     notifications: Option<NotificationPayloads>,
     #[builder(default)]
+    model_resolution: ModelResolutionConfig,
+    #[builder(default)]
     discovery_delay: Duration,
 }
 
@@ -87,6 +91,7 @@ pub(crate) struct FakeBackend {
     notifications: Vec<Vec<u8>>,
     discovery_delay: Duration,
     write_without_response_limit: Option<usize>,
+    model_resolution: ModelResolutionConfig,
 }
 
 impl FakeBackend {
@@ -107,6 +112,7 @@ impl FakeBackend {
             notifications,
             discovery_delay: config.discovery_delay,
             write_without_response_limit: DEFAULT_WRITE_WITHOUT_RESPONSE_LIMIT,
+            model_resolution: config.model_resolution,
         }
     }
 
@@ -122,6 +128,7 @@ impl FakeBackend {
             notifications,
             discovery_delay,
             write_without_response_limit,
+            model_resolution,
         } = self;
 
         let device = first_matching_device(devices, discovery_delay, name_prefix).await?;
@@ -134,10 +141,23 @@ impl FakeBackend {
             });
         }
 
-        let device_profile =
-            resolve_device_profile(&device, &services, write_without_response_limit);
+        let selected_led_type = select_led_type_override(&device, &model_resolution)?;
+        let led_info = initial_read
+            .as_deref()
+            .and_then(super::LedInfoResponse::parse);
+        let device_routing_profile =
+            resolve_device_routing_profile(&device, led_info, selected_led_type);
+        ensure_ambiguous_shape_is_resolved(&device, device_routing_profile)?;
+
+        let device_profile = resolve_device_profile(
+            &device,
+            &services,
+            write_without_response_limit,
+            device_routing_profile,
+        );
         let session_metadata =
             SessionMetadata::new(true, write_without_response_limit, device_profile)
+                .with_device_routing_profile(device_routing_profile)
                 .with_endpoint_resolution(
                     negotiated_endpoints.gatt_profile,
                     negotiated_endpoints.endpoint_uuids.clone(),
@@ -186,6 +206,10 @@ impl ConnectedBleSession for FakeDeviceSession {
 
     fn device_profile(&self) -> DeviceProfile {
         self.session_metadata.device_profile()
+    }
+
+    fn device_routing_profile(&self) -> Option<super::DeviceRoutingProfile> {
+        self.session_metadata.device_routing_profile()
     }
 
     async fn read_endpoint(&self, endpoint: EndpointId) -> Result<Vec<u8>, InteractionError> {
@@ -276,6 +300,54 @@ impl ConnectedBleSession for FakeDeviceSession {
     }
 }
 
+fn select_led_type_override(
+    device: &FoundDevice,
+    model_resolution: &ModelResolutionConfig,
+) -> Result<Option<u8>, InteractionError> {
+    let Some(identity) = device.scan_identity() else {
+        return Ok(None);
+    };
+
+    if let Some(override_led_type) = model_resolution.led_type_override() {
+        if !is_supported_led_type(override_led_type) {
+            return Err(InteractionError::InvalidLedTypeOverride {
+                value: override_led_type,
+            });
+        }
+        return Ok(Some(override_led_type));
+    }
+
+    if super::DeviceProfileResolver::requires_led_type_selection(identity) {
+        return Ok(None);
+    }
+
+    Ok(None)
+}
+
+fn ensure_ambiguous_shape_is_resolved(
+    device: &FoundDevice,
+    routing_profile: Option<super::DeviceRoutingProfile>,
+) -> Result<(), InteractionError> {
+    let Some(identity) = device.scan_identity() else {
+        return Ok(());
+    };
+
+    if !super::DeviceProfileResolver::requires_led_type_selection(identity) {
+        return Ok(());
+    }
+    if routing_profile
+        .and_then(|profile| profile.led_type)
+        .is_some()
+    {
+        return Ok(());
+    }
+
+    Err(InteractionError::AmbiguousShapeSelectionRequired {
+        device_id: device.device_id().to_string(),
+        shape: identity.shape,
+    })
+}
+
 fn parse_scan_fixture(raw_fixture: &str) -> Result<Vec<FoundDevice>, FixtureError> {
     if raw_fixture.trim().is_empty() {
         return Err(FixtureError::EmptyFixture);
@@ -306,7 +378,7 @@ async fn first_matching_device(
 
 fn parse_scan_record(raw_record: &str) -> Result<FoundDevice, FixtureError> {
     let fields: Vec<&str> = raw_record.split('|').map(str::trim).collect();
-    if fields.len() != 4 {
+    if fields.len() != 4 && fields.len() != 5 {
         return Err(FixtureError::InvalidRecordFieldCount);
     }
     if fields[0].is_empty() || fields[1].is_empty() || fields[2].is_empty() || fields[3].is_empty()
@@ -325,12 +397,30 @@ fn parse_scan_record(raw_record: &str) -> Result<FoundDevice, FixtureError> {
         Some(fields[3].parse::<i16>()?)
     };
 
-    Ok(FoundDevice::new(
+    let device = FoundDevice::new(
         fields[0].to_string(),
         fields[1].to_string(),
         local_name,
         rssi,
-    ))
+    );
+
+    let scan_model = match fields.get(4).copied().filter(|value| *value != "-") {
+        Some(value) => {
+            let scan_payload = parse_hex(value)?;
+            let scan_identity = ScanModelHandler::parse_identity(&scan_payload)
+                .ok_or(FixtureError::InvalidScanModelPayload)?;
+            let model_profile = ScanModelHandler::resolve_model(&scan_identity);
+            Some((scan_identity, model_profile))
+        }
+        None => None,
+    };
+
+    Ok(match scan_model {
+        Some((scan_identity, model_profile)) => {
+            device.with_scan_model(scan_identity, model_profile)
+        }
+        None => device,
+    })
 }
 
 fn parse_notifications(raw_value: &str) -> Result<Vec<Vec<u8>>, FixtureError> {
@@ -398,7 +488,10 @@ mod tests {
 
     #[rstest]
     #[case("hci0|AA:BB|IDM-Cube|-43", 1)]
-    #[case("hci0|AA:BB|IDM-Cube|-43;hci1|CC:DD|Speaker|-55", 2)]
+    #[case(
+        "hci0|AA:BB|IDM-Cube|-43|0FFF5452007004010200010520002000;hci1|CC:DD|Speaker|-55",
+        2
+    )]
     fn parse_scan_fixture_parses_records(#[case] fixture: &str, #[case] expected_count: usize) {
         let devices = parse_scan_fixture(fixture).expect("fixture should parse");
         assert_eq!(expected_count, devices.len());
@@ -414,5 +507,11 @@ mod tests {
     fn parse_hex_rejects_odd_length() {
         let result = parse_hex("A");
         assert_matches!(result, Err(FixtureError::InvalidHexLength));
+    }
+
+    #[test]
+    fn parse_scan_fixture_rejects_invalid_scan_model_payload() {
+        let result = parse_scan_fixture("hci0|AA:BB|IDM-Cube|-43|DEADBEEF");
+        assert_matches!(result, Err(FixtureError::InvalidScanModelPayload));
     }
 }

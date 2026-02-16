@@ -1,18 +1,27 @@
 use async_trait::async_trait;
 use tracing::info;
 
+use super::DeviceRoutingProfile;
 use super::btleplug_backend::BtleplugBackend;
 use super::fake_backend::{FakeBackend, FakeBackendConfig};
 use super::model::{
     EndpointPresence, FoundDevice, InspectReport, ListenSummary, NotificationRunSummary,
 };
+use super::model_overrides::ModelResolutionConfig;
 use super::profile::DeviceProfile;
 use crate::error::InteractionError;
 use crate::protocol::EndpointId;
 
 /// Creates a hardware client backed by the real BLE transport.
 pub(crate) fn real_hardware_client() -> Box<dyn HardwareClient> {
-    Box::new(RealHardwareClient::new())
+    real_hardware_client_with_model_resolution(ModelResolutionConfig::default())
+}
+
+/// Creates a hardware client backed by the real BLE transport with model-resolution settings.
+pub(crate) fn real_hardware_client_with_model_resolution(
+    model_resolution: ModelResolutionConfig,
+) -> Box<dyn HardwareClient> {
+    Box::new(RealHardwareClient::new(model_resolution))
 }
 
 /// Creates a hardware client backed by fake BLE fixtures.
@@ -44,6 +53,9 @@ pub(crate) trait ConnectedBleSession: Send {
 
     /// Returns the resolved device profile for this session.
     fn device_profile(&self) -> DeviceProfile;
+
+    /// Returns the resolved routing profile for this session, when available.
+    fn device_routing_profile(&self) -> Option<DeviceRoutingProfile>;
 
     /// Reads one endpoint value.
     async fn read_endpoint(&self, endpoint: EndpointId) -> Result<Vec<u8>, InteractionError>;
@@ -158,12 +170,12 @@ pub trait HardwareClient: Send + Sync {
 
 #[derive(Debug)]
 struct RealHardwareClient {
-    _private: (),
+    model_resolution: ModelResolutionConfig,
 }
 
 impl RealHardwareClient {
-    fn new() -> Self {
-        Self { _private: () }
+    fn new(model_resolution: ModelResolutionConfig) -> Self {
+        Self { model_resolution }
     }
 }
 
@@ -173,8 +185,8 @@ impl HardwareClient for RealHardwareClient {
         self: Box<Self>,
         name_prefix: &str,
     ) -> Result<DeviceSession, InteractionError> {
-        let _ = self;
-        let backend = BtleplugBackend::new().await?;
+        let Self { model_resolution } = *self;
+        let backend = BtleplugBackend::new(model_resolution).await?;
         let handler = SessionHandler::new(backend);
         handler.connect_first(name_prefix).await
     }
@@ -240,6 +252,12 @@ impl DeviceSession {
     #[must_use]
     pub fn device_profile(&self) -> DeviceProfile {
         self.session.device_profile()
+    }
+
+    /// Returns the resolved routing profile for this session, when available.
+    #[must_use]
+    pub fn device_routing_profile(&self) -> Option<DeviceRoutingProfile> {
+        self.session.device_routing_profile()
     }
 
     /// Reads one endpoint value.

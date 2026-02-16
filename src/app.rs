@@ -5,8 +5,10 @@ use anyhow::Result;
 use crate::cli::ui::Spinner;
 use crate::cli::{Command, FakeArgs};
 use crate::hw::{
-    DeviceSession, HardwareClient, fake_hardware_client as build_fake_hardware_client,
+    DeviceSession, HardwareClient, ModelResolutionConfig,
+    fake_hardware_client as build_fake_hardware_client,
     real_hardware_client as build_real_hardware_client,
+    real_hardware_client_with_model_resolution as build_real_hardware_client_with_model_resolution,
 };
 use crate::telemetry;
 use crate::terminal::TerminalClient;
@@ -18,6 +20,14 @@ const CONNECTING_SPINNER_MESSAGE: &str = "Scanning for iDotMatrix devices and co
 #[must_use]
 pub fn real_hardware_client() -> Box<dyn HardwareClient> {
     build_real_hardware_client()
+}
+
+/// Creates a hardware client backed by the real BLE transport with model-resolution options.
+#[must_use]
+pub fn real_hardware_client_with_model_resolution(
+    model_resolution: ModelResolutionConfig,
+) -> Box<dyn HardwareClient> {
+    build_real_hardware_client_with_model_resolution(model_resolution)
 }
 
 /// Creates a hardware client backed by fake BLE fixtures.

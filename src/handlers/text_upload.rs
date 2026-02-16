@@ -38,6 +38,8 @@ pub enum TextUploadError {
     MissingNotifyAck,
     #[error("received unexpected notification while waiting for an acknowledgement")]
     UnexpectedNotifyEvent,
+    #[error("text upload path is unresolved for this device routing profile")]
+    UnresolvedTextPath,
     #[error(transparent)]
     NotifyDecode(#[from] NotificationDecodeError),
 }
@@ -246,6 +248,7 @@ impl TextUploadHandler {
         session: &DeviceSession,
         request: TextUploadRequest,
     ) -> Result<UploadReceipt, ProtocolError> {
+        ensure_text_path_is_resolved(session)?;
         let frame = build_upload_frame(&request)?;
         let chunk_size = write_chunk_size(session)?;
 
@@ -303,6 +306,17 @@ fn write_chunk_size(session: &DeviceSession) -> Result<usize, ProtocolError> {
         return Err(TextUploadError::InvalidChunkSize.into());
     }
     Ok(chunk_size)
+}
+
+fn ensure_text_path_is_resolved(session: &DeviceSession) -> Result<(), ProtocolError> {
+    if session
+        .device_routing_profile()
+        .is_some_and(|profile| profile.text_path.is_none())
+    {
+        return Err(TextUploadError::UnresolvedTextPath.into());
+    }
+
+    Ok(())
 }
 
 async fn apply_pacing(session: &DeviceSession, pacing: UploadPacing) -> Result<(), ProtocolError> {

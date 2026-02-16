@@ -10,8 +10,8 @@ Status: `PARTIAL`
 Priority: `P0`  
 Comment: Endpoint/profile negotiation is now implemented for FA and FEE9
 service families (including runtime read/notify selection and surfaced session
-metadata). Discovery is still local-name-prefix based and does not yet parse
-manufacturer AD payloads (`TR 00 70/71`) for identity-first model selection.
+metadata). Discovery now validates manufacturer AD payloads (`TR 00 70/71`) and
+still supports optional local-name-prefix filtering.
 
 Protocol references:
 
@@ -53,12 +53,11 @@ impl<T: BleTransport> SessionHandler<T> {
 
 ## Scan + Model Identification Handler
 
-Status: `TODO`  
+Status: `DONE`  
 Priority: `P0`  
-Comment: Reset from `DONE` on `2026-02-16`. Current implementation does not
-parse manufacturer AD payloads (`TR 00 70/71`) for CID/PID/shape metadata and
-therefore cannot reliably identify model capabilities before selecting handler
-behaviour.
+Comment: Manufacturer payload parsing and model resolution are implemented and
+wired into discovery. Ambiguous-shape devices now resolve via persisted
+per-device LED-type overrides and connect-time LED-info query.
 
 Protocol references:
 
@@ -112,12 +111,12 @@ impl ScanModelHandler {
 
 ## Device Profile Resolver Handler
 
-Status: `TODO`  
+Status: `DONE`  
 Priority: `P0`  
-Comment: Reset from `DONE` on `2026-02-16`. Current `src/hw/profile.rs` resolver
-infers panel/profile mostly from local-name heuristics (`16/32/64`) and service
-hints, and does not consume manufacturer identity (`shape/cid/pid`),
-ambiguous-shape overrides, or canonical joint-mode mapping.
+Comment: Typed routing resolution is now complete: scan identity + optional LED
+info query are merged into canonical LED type/panel/text path/joint mode,
+unresolved ambiguity is surfaced as an explicit error, and resolved routing is
+surfaced in session metadata and consumed by text upload path validation.
 
 Protocol references:
 

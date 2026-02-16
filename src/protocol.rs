@@ -115,5 +115,4 @@ mod tests {
         let write = endpoint_metadata(EndpointId::WriteCharacteristic);
         assert_eq!("iDotMatrix write data", write.name());
     }
-
 }
