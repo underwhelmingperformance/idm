@@ -1,5 +1,8 @@
+use derive_more::From;
 use thiserror::Error;
 
+use crate::handlers::{BrightnessError, FrameCodecError, TextUploadError};
+use crate::notification::NotificationDecodeError;
 use crate::protocol::{EndpointId, endpoint_metadata};
 
 /// Errors returned by BLE interaction operations.
@@ -17,6 +20,8 @@ pub enum InteractionError {
         uuid = endpoint_metadata(*endpoint).uuid()
     )]
     MissingEndpoint { endpoint: EndpointId },
+    #[error("required iDotMatrix endpoints are missing: {missing}")]
+    MissingRequiredEndpoints { missing: String },
     #[error("failed while waiting for Ctrl+C")]
     CtrlC(#[from] std::io::Error),
     #[error(transparent)]
@@ -52,4 +57,24 @@ pub(crate) enum CliConfigError {
 pub(crate) enum TelemetryError {
     #[error("failed to install tracing subscriber")]
     Subscriber(#[from] tracing_subscriber::util::TryInitError),
+}
+
+/// Top-level protocol errors wrapping module-specific error types.
+#[derive(Debug, Error, From)]
+pub enum ProtocolError {
+    #[error(transparent)]
+    #[from(NotificationDecodeError, Box<NotificationDecodeError>)]
+    Notification(Box<NotificationDecodeError>),
+    #[error(transparent)]
+    #[from(FrameCodecError, Box<FrameCodecError>)]
+    FrameCodec(Box<FrameCodecError>),
+    #[error(transparent)]
+    #[from(BrightnessError, Box<BrightnessError>)]
+    Brightness(Box<BrightnessError>),
+    #[error(transparent)]
+    #[from(TextUploadError, Box<TextUploadError>)]
+    TextUpload(Box<TextUploadError>),
+    #[error(transparent)]
+    #[from(InteractionError, Box<InteractionError>)]
+    Interaction(Box<InteractionError>),
 }

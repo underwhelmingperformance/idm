@@ -1,7 +1,7 @@
 ---
 source: src/cli/ui/inspect_view.rs
-assertion_line: 143
-expression: "InspectReportView::new(&report, painter).to_string()"
+assertion_line: 276
+expression: "InspectReportView::new(&report, &painter).to_string()"
 ---
 Connected device:
 ╭───────────┬───────────╮
@@ -12,6 +12,25 @@ Connected device:
 │ name      │ IDM-Clock │
 │ rssi      │ -43       │
 ╰───────────┴───────────╯
+
+Session metadata:
+╭───────────────────────────────────────┬─────────────╮
+│ field                                 │ value       │
+├───────────────────────────────────────┼─────────────┤
+│ required_endpoints_verified           │ yes         │
+│ gatt_profile                          │ <unknown>   │
+│ write_without_response_limit          │ 514 bytes   │
+│ discovered_services                   │ 1           │
+│ discovered_characteristics            │ 2           │
+│ write_characteristic_properties       │ write       │
+│ read_notify_characteristic_properties │ read,notify │
+│ resolved_write_characteristic_uuid    │ <unknown>   │
+│ resolved_read_notify_uuid             │ <unknown>   │
+│ profile_panel_size                    │ unknown     │
+│ profile_image_upload_mode             │ png_file    │
+│ profile_gif_header                    │ timed       │
+│ profile_write_chunk_fallback          │ 512 bytes   │
+╰───────────────────────────────────────┴─────────────╯
 
 Expected iDotMatrix endpoints:
 ╭──────────────────────────────────────┬────────────────┬─────────────────────────────┬─────────╮

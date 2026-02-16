@@ -1,0 +1,6 @@
+---
+source: src/cli/ui/listen_view.rs
+assertion_line: 197
+expression: view.to_string()
+---
+[0042] (chunk_ack) 05 00 01

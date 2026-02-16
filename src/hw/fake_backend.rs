@@ -1,21 +1,27 @@
 use std::str::FromStr;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use bon::Builder;
 use tokio::time::sleep;
 
+use super::DeviceProfile;
+use super::hardware::{ConnectedBleSession, WriteMode, missing_required_endpoints};
 use super::model::{
     CharacteristicInfo, EndpointPresence, FoundDevice, InspectReport, ListenStopReason,
-    ListenSummary, ServiceInfo,
+    NotificationRunSummary, ServiceInfo, SessionMetadata,
 };
+use super::profile::resolve_device_profile;
+use super::session::{FA_SERVICE_UUID, FA_WRITE_UUID, negotiate_session_endpoints};
 use crate::error::{FixtureError, InteractionError};
-use crate::protocol::{self, EndpointId};
+use crate::protocol::EndpointId;
 
 const DEFAULT_INITIAL_READ: [u8; 5] = [0x05, 0x00, 0x01, 0x00, 0x01];
 const DEFAULT_NOTIFICATIONS: [[u8; 5]; 2] = [
     [0x05, 0x00, 0x01, 0x00, 0x01],
     [0x05, 0x00, 0x01, 0x00, 0x03],
 ];
+const DEFAULT_WRITE_WITHOUT_RESPONSE_LIMIT: Option<usize> = Some(514);
 
 /// Parsed fake scan fixture records.
 #[derive(Debug, Clone, derive_more::Into)]
@@ -80,6 +86,7 @@ pub(crate) struct FakeBackend {
     initial_read: Option<Vec<u8>>,
     notifications: Vec<Vec<u8>>,
     discovery_delay: Duration,
+    write_without_response_limit: Option<usize>,
 }
 
 impl FakeBackend {
@@ -89,10 +96,9 @@ impl FakeBackend {
             .initial_read
             .map(Into::into)
             .or_else(|| Some(DEFAULT_INITIAL_READ.to_vec()));
-        let notifications = config.notifications.map_or_else(
-            || DEFAULT_NOTIFICATIONS.map(Vec::from).to_vec(),
-            Into::into,
-        );
+        let notifications = config
+            .notifications
+            .map_or_else(|| DEFAULT_NOTIFICATIONS.map(Vec::from).to_vec(), Into::into);
 
         Self {
             devices: config.scan_fixture.into(),
@@ -100,91 +106,158 @@ impl FakeBackend {
             initial_read,
             notifications,
             discovery_delay: config.discovery_delay,
+            write_without_response_limit: DEFAULT_WRITE_WITHOUT_RESPONSE_LIMIT,
         }
     }
 
-    /// Returns an inspect report for the first matching fake peripheral.
-    pub(crate) async fn inspect_first_matching_device(
+    /// Connects to the first matching fake peripheral and returns a session.
+    pub(crate) async fn connect_first_matching_device(
         self,
         name_prefix: &str,
-    ) -> Result<InspectReport, InteractionError> {
+    ) -> Result<FakeDeviceSession, InteractionError> {
         let Self {
             devices,
             services,
-            initial_read: _,
-            notifications: _,
-            discovery_delay,
-        } = self;
-        let device = first_matching_device(devices, discovery_delay, name_prefix).await?;
-        let endpoint_presence = endpoint_presence(&services);
-        Ok(InspectReport::new(device, services, endpoint_presence))
-    }
-
-    /// Prepares a fake listen session for the first matching device.
-    pub(crate) async fn prepare_listen_first_matching_device(
-        self,
-        name_prefix: &str,
-    ) -> Result<PreparedFakeListen, InteractionError> {
-        let Self {
-            devices,
-            services: _,
             initial_read,
             notifications,
             discovery_delay,
+            write_without_response_limit,
         } = self;
+
         let device = first_matching_device(devices, discovery_delay, name_prefix).await?;
-        Ok(PreparedFakeListen {
+        let negotiated_endpoints = negotiate_session_endpoints(&services)?;
+        let endpoint_presence = negotiated_endpoints.endpoint_presence();
+        let missing = missing_required_endpoints(&endpoint_presence);
+        if !missing.is_empty() {
+            return Err(InteractionError::MissingRequiredEndpoints {
+                missing: format_missing_endpoints(&missing),
+            });
+        }
+
+        let device_profile =
+            resolve_device_profile(&device, &services, write_without_response_limit);
+        let session_metadata =
+            SessionMetadata::new(true, write_without_response_limit, device_profile)
+                .with_endpoint_resolution(
+                    negotiated_endpoints.gatt_profile,
+                    negotiated_endpoints.endpoint_uuids.clone(),
+                );
+
+        Ok(FakeDeviceSession {
             device,
+            services,
+            endpoint_presence,
+            session_metadata,
             initial_read,
             notifications,
         })
     }
 }
 
-/// A prepared fake listen session.
+/// Active fake session.
 #[derive(Debug)]
-pub(crate) struct PreparedFakeListen {
+pub(crate) struct FakeDeviceSession {
     device: FoundDevice,
+    services: Vec<ServiceInfo>,
+    endpoint_presence: EndpointPresence,
+    session_metadata: SessionMetadata,
     initial_read: Option<Vec<u8>>,
     notifications: Vec<Vec<u8>>,
 }
 
-impl PreparedFakeListen {
-    /// Returns connected device details.
-    pub(crate) fn device(&self) -> &FoundDevice {
+#[async_trait(?Send)]
+impl ConnectedBleSession for FakeDeviceSession {
+    fn device(&self) -> &FoundDevice {
         &self.device
     }
 
-    /// Returns the initial read payload from `fa03`, if any.
-    pub(crate) fn initial_read(&self) -> Option<&[u8]> {
-        self.initial_read.as_deref()
+    fn inspect_report(&self) -> InspectReport {
+        InspectReport::new(
+            self.device.clone(),
+            self.services.clone(),
+            self.endpoint_presence.clone(),
+            self.session_metadata.clone(),
+        )
     }
 
-    /// Emits fixture notifications and returns a session summary.
-    pub(crate) fn run<F>(
-        self,
+    fn write_without_response_limit(&self) -> Option<usize> {
+        self.session_metadata.write_without_response_limit()
+    }
+
+    fn device_profile(&self) -> DeviceProfile {
+        self.session_metadata.device_profile()
+    }
+
+    async fn read_endpoint(&self, endpoint: EndpointId) -> Result<Vec<u8>, InteractionError> {
+        self.read_endpoint_optional(endpoint)
+            .await?
+            .ok_or(InteractionError::MissingEndpoint { endpoint })
+    }
+
+    async fn read_endpoint_optional(
+        &self,
+        endpoint: EndpointId,
+    ) -> Result<Option<Vec<u8>>, InteractionError> {
+        if endpoint != EndpointId::ReadNotifyCharacteristic {
+            return Err(InteractionError::MissingEndpoint { endpoint });
+        }
+
+        Ok(self.initial_read.clone())
+    }
+
+    async fn write_endpoint(
+        &self,
+        endpoint: EndpointId,
+        _payload: &[u8],
+        _mode: WriteMode,
+    ) -> Result<(), InteractionError> {
+        if endpoint != EndpointId::WriteCharacteristic {
+            return Err(InteractionError::MissingEndpoint { endpoint });
+        }
+
+        Ok(())
+    }
+
+    async fn subscribe_endpoint(&self, endpoint: EndpointId) -> Result<(), InteractionError> {
+        if endpoint != EndpointId::ReadNotifyCharacteristic {
+            return Err(InteractionError::MissingEndpoint { endpoint });
+        }
+
+        Ok(())
+    }
+
+    async fn unsubscribe_endpoint(&self, endpoint: EndpointId) -> Result<(), InteractionError> {
+        if endpoint != EndpointId::ReadNotifyCharacteristic {
+            return Err(InteractionError::MissingEndpoint { endpoint });
+        }
+
+        Ok(())
+    }
+
+    async fn run_notifications(
+        &self,
+        endpoint: EndpointId,
         max_notifications: Option<usize>,
-        mut on_notification: F,
-    ) -> ListenSummary
-    where
-        F: FnMut(usize, &[u8]),
-    {
+        on_notification: &mut dyn FnMut(usize, Vec<u8>),
+    ) -> Result<NotificationRunSummary, InteractionError> {
+        if endpoint != EndpointId::ReadNotifyCharacteristic {
+            return Err(InteractionError::MissingEndpoint { endpoint });
+        }
+
         if let Some(limit) = max_notifications
             && limit == 0
         {
-            return ListenSummary::new(
-                self.device,
-                self.initial_read,
+            return Ok(NotificationRunSummary::new(
                 0,
                 ListenStopReason::ReachedLimit(0),
-            );
+            ));
         }
 
         let mut received = 0usize;
         let mut stop_reason = ListenStopReason::NotificationStreamClosed;
-        for payload in self.notifications {
+        for payload in &self.notifications {
             received += 1;
-            on_notification(received, &payload);
+            on_notification(received, payload.clone());
 
             if let Some(limit) = max_notifications
                 && received >= limit
@@ -194,7 +267,12 @@ impl PreparedFakeListen {
             }
         }
 
-        ListenSummary::new(self.device, self.initial_read, received, stop_reason)
+        Ok(NotificationRunSummary::new(received, stop_reason))
+    }
+
+    async fn close(self: Box<Self>) -> Result<(), InteractionError> {
+        let _ = self;
+        Ok(())
     }
 }
 
@@ -286,42 +364,28 @@ fn parse_hex(raw_value: &str) -> Result<Vec<u8>, FixtureError> {
 }
 
 fn default_services() -> Vec<ServiceInfo> {
-    let service = protocol::endpoint_metadata(EndpointId::ControlService);
-    let write_characteristic = protocol::endpoint_metadata(EndpointId::WriteCharacteristic);
-    let read_notify_characteristic =
-        protocol::endpoint_metadata(EndpointId::ReadNotifyCharacteristic);
-
     vec![ServiceInfo::new(
-        service.uuid().to_string(),
+        FA_SERVICE_UUID.to_string(),
         true,
         vec![
+            CharacteristicInfo::new(FA_WRITE_UUID.to_string(), vec!["write".to_string()]),
             CharacteristicInfo::new(
-                write_characteristic.uuid().to_string(),
-                vec!["write".to_string()],
-            ),
-            CharacteristicInfo::new(
-                read_notify_characteristic.uuid().to_string(),
+                "0000fa03-0000-1000-8000-00805f9b34fb".to_string(),
                 vec!["read".to_string(), "notify".to_string()],
             ),
         ],
     )]
 }
 
-fn endpoint_presence(services: &[ServiceInfo]) -> EndpointPresence {
-    let mut presence_by_endpoint = protocol::empty_presence_map();
-
-    for service in services {
-        if let Some(endpoint) = protocol::endpoint_for_uuid(service.uuid()) {
-            presence_by_endpoint.insert(endpoint, true);
-        }
-        for characteristic in service.characteristics() {
-            if let Some(endpoint) = protocol::endpoint_for_uuid(characteristic.uuid()) {
-                presence_by_endpoint.insert(endpoint, true);
-            }
-        }
-    }
-
-    EndpointPresence::new(presence_by_endpoint)
+fn format_missing_endpoints(endpoints: &[EndpointId]) -> String {
+    endpoints
+        .iter()
+        .map(|endpoint| {
+            let metadata = crate::protocol::endpoint_metadata(*endpoint);
+            format!("{} ({})", metadata.name(), metadata.uuid())
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]

@@ -1,19 +1,25 @@
+use std::collections::HashMap;
 use std::time::Duration;
 
+use async_trait::async_trait;
 use btleplug::api::{
-    Central, CharPropFlags, Characteristic, Manager as _, Peripheral as _, ScanFilter,
+    Central, CharPropFlags, Characteristic, Manager as _, Peripheral as _, ScanFilter, WriteType,
 };
 use btleplug::platform::{Adapter, Manager, Peripheral};
 use tokio::time::sleep;
 use tokio_stream::StreamExt;
 use tracing::{debug, info, instrument};
 
+use super::DeviceProfile;
+use super::hardware::{ConnectedBleSession, WriteMode, missing_required_endpoints};
 use super::model::{
     CharacteristicInfo, EndpointPresence, FoundDevice, InspectReport, ListenStopReason,
-    ListenSummary, ServiceInfo,
+    NotificationRunSummary, ServiceInfo, SessionMetadata,
 };
+use super::profile::resolve_device_profile;
+use super::session::negotiate_session_endpoints;
 use crate::error::InteractionError;
-use crate::protocol::{self, EndpointId};
+use crate::protocol::EndpointId;
 
 /// Hardware backend backed by `btleplug`.
 #[derive(Debug)]
@@ -99,77 +105,154 @@ impl BtleplugBackend {
         Ok(handles)
     }
 
-    /// Connects to the first matching peripheral and returns a full service inspection report.
-    pub(crate) async fn inspect_first_matching_device(
-        &self,
+    /// Connects to the first matching peripheral and prepares a session object.
+    pub(crate) async fn connect_first_matching_device(
+        self,
         name_prefix: &str,
-    ) -> Result<InspectReport, InteractionError> {
+    ) -> Result<RealDeviceSession, InteractionError> {
         let connected = self.find_and_connect_first_matching(name_prefix).await?;
-        let (services, endpoint_presence) = collect_services_and_presence(&connected.peripheral);
-        let report = InspectReport::new(connected.device, services, endpoint_presence);
-
-        if let Err(error) = connected.peripheral.disconnect().await {
-            debug!(?error, "failed to disconnect after inspection");
-        }
-        Ok(report)
-    }
-
-    /// Connects to the first matching device and prepares a notification session.
-    pub(crate) async fn prepare_listen_first_matching_device(
-        &self,
-        name_prefix: &str,
-    ) -> Result<PreparedRealListen, InteractionError> {
-        let connected = self.find_and_connect_first_matching(name_prefix).await?;
-        let read_endpoint = EndpointId::ReadNotifyCharacteristic;
-        let read_characteristic = find_characteristic(&connected.peripheral, read_endpoint).ok_or(
-            InteractionError::MissingEndpoint {
-                endpoint: read_endpoint,
-            },
+        let (services, characteristics_by_uuid) =
+            collect_services_and_characteristics(&connected.peripheral);
+        let negotiated_endpoints = negotiate_session_endpoints(&services)?;
+        let endpoint_presence = negotiated_endpoints.endpoint_presence();
+        let characteristics_by_endpoint = characteristics_by_endpoint(
+            &negotiated_endpoints.endpoint_uuids,
+            &characteristics_by_uuid,
         )?;
 
-        let initial_read = connected.peripheral.read(&read_characteristic).await?;
-        connected.peripheral.subscribe(&read_characteristic).await?;
+        let missing = missing_required_endpoints(&endpoint_presence);
+        if !missing.is_empty() {
+            if let Err(error) = connected.peripheral.disconnect().await {
+                debug!(
+                    ?error,
+                    "failed to disconnect after endpoint validation error"
+                );
+            }
 
-        Ok(PreparedRealListen {
+            return Err(InteractionError::MissingRequiredEndpoints {
+                missing: format_missing_endpoints(&missing),
+            });
+        }
+
+        let write_without_response_limit = None;
+        let device_profile =
+            resolve_device_profile(&connected.device, &services, write_without_response_limit);
+        let session_metadata =
+            SessionMetadata::new(true, write_without_response_limit, device_profile)
+                .with_endpoint_resolution(
+                    negotiated_endpoints.gatt_profile,
+                    negotiated_endpoints.endpoint_uuids.clone(),
+                );
+
+        Ok(RealDeviceSession {
             device: connected.device,
-            initial_read: Some(initial_read),
+            services,
+            endpoint_presence,
+            session_metadata,
+            characteristics_by_endpoint,
             peripheral: connected.peripheral,
-            read_characteristic,
         })
     }
 }
 
-/// A prepared listen session on a connected real peripheral.
+/// Active session bound to a real peripheral.
 #[derive(Debug)]
-pub(crate) struct PreparedRealListen {
+pub(crate) struct RealDeviceSession {
     device: FoundDevice,
-    initial_read: Option<Vec<u8>>,
+    services: Vec<ServiceInfo>,
+    endpoint_presence: EndpointPresence,
+    session_metadata: SessionMetadata,
+    characteristics_by_endpoint: HashMap<EndpointId, Characteristic>,
     peripheral: Peripheral,
-    read_characteristic: Characteristic,
 }
 
-impl PreparedRealListen {
-    /// Returns connected device details.
-    pub(crate) fn device(&self) -> &FoundDevice {
+impl RealDeviceSession {
+    fn characteristic_for(
+        &self,
+        endpoint: EndpointId,
+    ) -> Result<&Characteristic, InteractionError> {
+        self.characteristics_by_endpoint
+            .get(&endpoint)
+            .ok_or(InteractionError::MissingEndpoint { endpoint })
+    }
+}
+
+#[async_trait(?Send)]
+impl ConnectedBleSession for RealDeviceSession {
+    fn device(&self) -> &FoundDevice {
         &self.device
     }
 
-    /// Returns the initial read payload from `fa03`, if any.
-    pub(crate) fn initial_read(&self) -> Option<&[u8]> {
-        self.initial_read.as_deref()
+    fn inspect_report(&self) -> InspectReport {
+        InspectReport::new(
+            self.device.clone(),
+            self.services.clone(),
+            self.endpoint_presence.clone(),
+            self.session_metadata.clone(),
+        )
     }
 
-    /// Runs notification listening until interrupted, stream close, or limit reached.
-    pub(crate) async fn run<F>(
-        self,
+    fn write_without_response_limit(&self) -> Option<usize> {
+        self.session_metadata.write_without_response_limit()
+    }
+
+    fn device_profile(&self) -> DeviceProfile {
+        self.session_metadata.device_profile()
+    }
+
+    async fn read_endpoint(&self, endpoint: EndpointId) -> Result<Vec<u8>, InteractionError> {
+        let characteristic = self.characteristic_for(endpoint)?;
+        let payload = self.peripheral.read(characteristic).await?;
+        Ok(payload)
+    }
+
+    async fn read_endpoint_optional(
+        &self,
+        endpoint: EndpointId,
+    ) -> Result<Option<Vec<u8>>, InteractionError> {
+        Ok(Some(self.read_endpoint(endpoint).await?))
+    }
+
+    async fn write_endpoint(
+        &self,
+        endpoint: EndpointId,
+        payload: &[u8],
+        mode: WriteMode,
+    ) -> Result<(), InteractionError> {
+        let characteristic = self.characteristic_for(endpoint)?;
+        let write_type = match mode {
+            WriteMode::WithResponse => WriteType::WithResponse,
+            WriteMode::WithoutResponse => WriteType::WithoutResponse,
+        };
+        self.peripheral
+            .write(characteristic, payload, write_type)
+            .await?;
+        Ok(())
+    }
+
+    async fn subscribe_endpoint(&self, endpoint: EndpointId) -> Result<(), InteractionError> {
+        let characteristic = self.characteristic_for(endpoint)?;
+        self.peripheral.subscribe(characteristic).await?;
+        Ok(())
+    }
+
+    async fn unsubscribe_endpoint(&self, endpoint: EndpointId) -> Result<(), InteractionError> {
+        let characteristic = self.characteristic_for(endpoint)?;
+        self.peripheral.unsubscribe(characteristic).await?;
+        Ok(())
+    }
+
+    async fn run_notifications(
+        &self,
+        endpoint: EndpointId,
         max_notifications: Option<usize>,
-        mut on_notification: F,
-    ) -> Result<ListenSummary, InteractionError>
-    where
-        F: FnMut(usize, &[u8]),
-    {
+        on_notification: &mut dyn FnMut(usize, Vec<u8>),
+    ) -> Result<NotificationRunSummary, InteractionError> {
+        let expected_characteristic = self.characteristic_for(endpoint)?;
+        let expected_uuid = expected_characteristic.uuid.to_string();
         let mut notifications = self.peripheral.notifications().await?;
         let mut received = 0usize;
+
         let stop_reason = loop {
             tokio::select! {
                 signal = tokio::signal::ctrl_c() => {
@@ -180,11 +263,12 @@ impl PreparedRealListen {
                     match maybe_notification {
                         Some(notification) => {
                             let notification_uuid = notification.uuid.to_string();
-                            if !endpoint_matches_uuid(EndpointId::ReadNotifyCharacteristic, &notification_uuid) {
+                            if !notification_uuid.eq_ignore_ascii_case(&expected_uuid) {
                                 continue;
                             }
+
                             received += 1;
-                            on_notification(received, &notification.value);
+                            on_notification(received, notification.value);
                             if let Some(limit) = max_notifications && received >= limit {
                                 break ListenStopReason::ReachedLimit(limit);
                             }
@@ -197,19 +281,14 @@ impl PreparedRealListen {
             }
         };
 
-        if let Err(error) = self.peripheral.unsubscribe(&self.read_characteristic).await {
-            debug!(?error, "failed to unsubscribe cleanly");
-        }
-        if let Err(error) = self.peripheral.disconnect().await {
-            debug!(?error, "failed to disconnect cleanly");
-        }
+        Ok(NotificationRunSummary::new(received, stop_reason))
+    }
 
-        Ok(ListenSummary::new(
-            self.device,
-            self.initial_read,
-            received,
-            stop_reason,
-        ))
+    async fn close(self: Box<Self>) -> Result<(), InteractionError> {
+        if self.peripheral.is_connected().await? {
+            self.peripheral.disconnect().await?;
+        }
+        Ok(())
     }
 }
 
@@ -225,31 +304,21 @@ struct ConnectedPeripheral {
     device: FoundDevice,
 }
 
-fn find_characteristic(peripheral: &Peripheral, endpoint: EndpointId) -> Option<Characteristic> {
-    peripheral
-        .services()
-        .iter()
-        .flat_map(|service| service.characteristics.iter())
-        .find(|characteristic| endpoint_matches_uuid(endpoint, &characteristic.uuid.to_string()))
-        .cloned()
-}
-
-fn collect_services_and_presence(peripheral: &Peripheral) -> (Vec<ServiceInfo>, EndpointPresence) {
+fn collect_services_and_characteristics(
+    peripheral: &Peripheral,
+) -> (Vec<ServiceInfo>, HashMap<String, Characteristic>) {
     let mut services = Vec::new();
-    let mut presence_by_endpoint = protocol::empty_presence_map();
+    let mut characteristics_by_uuid = HashMap::new();
 
     for service in peripheral.services() {
         let service_uuid = service.uuid.to_string().to_lowercase();
-        if let Some(endpoint) = protocol::endpoint_for_uuid(&service_uuid) {
-            presence_by_endpoint.insert(endpoint, true);
-        }
 
         let mut characteristics = Vec::new();
         for characteristic in &service.characteristics {
             let characteristic_uuid = characteristic.uuid.to_string().to_lowercase();
-            if let Some(endpoint) = protocol::endpoint_for_uuid(&characteristic_uuid) {
-                presence_by_endpoint.insert(endpoint, true);
-            }
+            characteristics_by_uuid
+                .entry(characteristic_uuid.clone())
+                .or_insert_with(|| characteristic.clone());
 
             characteristics.push(CharacteristicInfo::new(
                 characteristic_uuid,
@@ -266,7 +335,7 @@ fn collect_services_and_presence(peripheral: &Peripheral) -> (Vec<ServiceInfo>, 
     }
     services.sort_by(|left, right| left.uuid().cmp(right.uuid()));
 
-    (services, EndpointPresence::new(presence_by_endpoint))
+    (services, characteristics_by_uuid)
 }
 
 fn property_labels(flags: CharPropFlags) -> Vec<String> {
@@ -281,7 +350,37 @@ fn property_labels(flags: CharPropFlags) -> Vec<String> {
     }
 }
 
-fn endpoint_matches_uuid(endpoint: EndpointId, value: &str) -> bool {
-    let expected = protocol::endpoint_metadata(endpoint).uuid();
-    value.eq_ignore_ascii_case(expected)
+fn characteristics_by_endpoint(
+    endpoint_uuids: &HashMap<EndpointId, String>,
+    characteristics_by_uuid: &HashMap<String, Characteristic>,
+) -> Result<HashMap<EndpointId, Characteristic>, InteractionError> {
+    endpoint_uuids
+        .iter()
+        .filter_map(|(endpoint, uuid)| {
+            if matches!(endpoint, EndpointId::ControlService) {
+                return None;
+            }
+
+            Some(
+                characteristics_by_uuid
+                    .get(uuid)
+                    .cloned()
+                    .ok_or(InteractionError::MissingEndpoint {
+                        endpoint: *endpoint,
+                    })
+                    .map(|characteristic| (*endpoint, characteristic)),
+            )
+        })
+        .collect()
+}
+
+fn format_missing_endpoints(endpoints: &[EndpointId]) -> String {
+    endpoints
+        .iter()
+        .map(|endpoint| {
+            let metadata = crate::protocol::endpoint_metadata(*endpoint);
+            format!("{} ({})", metadata.name(), metadata.uuid())
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }

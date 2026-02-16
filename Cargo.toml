@@ -9,7 +9,9 @@ async-trait = "0.1.89"
 bon = "3.9.0"
 btleplug = "0.11.8"
 clap = { version = "4.5.58", features = ["derive"] }
-derive_more = { version = "2.1.1", features = ["display", "into"] }
+crc32fast = "1.5.0"
+derive_more = { version = "2.1.1", features = ["display", "from", "into"] }
+font8x8 = "0.3.1"
 humantime = "2.3.0"
 indicatif = "0.18.3"
 opentelemetry = "0.31.0"
@@ -19,6 +21,7 @@ strum = "0.27.2"
 strum_macros = "0.27.2"
 tabled = { version = "0.20.0", features = ["ansi"] }
 thiserror = "2.0.18"
+time = "0.3.47"
 tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread", "signal", "time"] }
 tokio-stream = "0.1.18"
 tracing = "0.1.44"

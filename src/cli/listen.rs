@@ -3,11 +3,12 @@ use std::io;
 
 use anyhow::Result;
 
-use crate::hw::HardwareClient;
+use crate::hw::{HardwareClient, ListenSummary};
+use crate::protocol::EndpointId;
 use crate::terminal::TerminalClient;
+use crate::{NotificationHandler, NotifyEvent};
 
-use super::IDM_NAME_PREFIX;
-use super::ui::{ListenNotificationView, ListenReadyView, ListenSummaryView, Painter, Spinner};
+use super::ui::{ListenNotificationView, ListenReadyView, ListenSummaryView, Painter};
 
 /// Arguments for the `listen` command.
 #[derive(Debug, Args)]
@@ -55,36 +56,63 @@ where
     W: io::Write,
 {
     let painter = Painter::new(terminal_client.stdout_is_terminal());
-    let spinner = Spinner::new(terminal_client.stderr_is_terminal());
-    let session = spinner
-        .with_spinner(
-            "Scanning for iDotMatrix devices and connecting...",
-            || async move { client.prepare_listen_first_device(IDM_NAME_PREFIX).await },
-        )
+    let session = crate::SessionHandler::new(client)
+        .connect_first(terminal_client)
         .await?;
+    let device = session.device().clone();
+    let endpoint = EndpointId::ReadNotifyCharacteristic;
+    let initial_read = match session.read_endpoint_optional(endpoint).await {
+        Ok(payload) => payload,
+        Err(error) => {
+            session.close().await?;
+            return Err(error.into());
+        }
+    };
+    if let Err(error) = session.subscribe_endpoint(endpoint).await {
+        session.close().await?;
+        return Err(error.into());
+    }
 
     writeln!(
         out,
         "{}",
-        ListenReadyView::new(session.device(), session.initial_read(), &painter)
+        ListenReadyView::new(&device, initial_read.as_deref(), &painter)
     )?;
     let mut write_error: Option<io::Error> = None;
 
-    let summary = session
-        .run(max_notifications, |index, payload| {
+    let run_result = session
+        .run_notifications(endpoint, max_notifications, |index, payload| {
             if write_error.is_some() {
                 return;
             }
-            let view = ListenNotificationView::new(index, payload, &painter);
+            let event_label = match NotificationHandler::decode(payload) {
+                Ok(NotifyEvent::ChunkAck) => Some("chunk_ack".to_string()),
+                Ok(NotifyEvent::UploadComplete) => Some("upload_complete".to_string()),
+                Ok(NotifyEvent::Unknown(_unknown_payload)) => Some("unknown".to_string()),
+                Err(error) => Some(format!("decode_error:{error}")),
+            };
+            let view = ListenNotificationView::new(index, payload, event_label, &painter);
             if let Err(error) = writeln!(out, "{view}") {
                 write_error = Some(error);
             }
         })
-        .await?;
+        .await;
+
+    if let Err(error) = session.unsubscribe_endpoint(endpoint).await {
+        tracing::debug!(?error, "failed to unsubscribe cleanly");
+    }
+    session.close().await?;
 
     if let Some(error) = write_error {
         return Err(error.into());
     }
+    let run_result = run_result?;
+    let summary = ListenSummary::new(
+        device,
+        initial_read,
+        run_result.received_notifications(),
+        run_result.stop_reason().clone(),
+    );
     writeln!(out)?;
     writeln!(out, "{}", ListenSummaryView::new(&summary, &painter))?;
 

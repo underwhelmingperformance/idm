@@ -1,5 +1,6 @@
 ---
 source: tests/commands_cli.rs
+assertion_line: 45
 expression: stdout.trim_end()
 ---
 Connected device:
@@ -11,6 +12,25 @@ Connected device:
 │ name      │ IDM-Clock │
 │ rssi      │ -43       │
 ╰───────────┴───────────╯
+
+Session metadata:
+╭───────────────────────────────────────┬──────────────────────────────────────╮
+│ field                                 │ value                                │
+├───────────────────────────────────────┼──────────────────────────────────────┤
+│ required_endpoints_verified           │ yes                                  │
+│ gatt_profile                          │ fa_fa02                              │
+│ write_without_response_limit          │ 514 bytes                            │
+│ discovered_services                   │ 1                                    │
+│ discovered_characteristics            │ 2                                    │
+│ write_characteristic_properties       │ write                                │
+│ read_notify_characteristic_properties │ read,notify                          │
+│ resolved_write_characteristic_uuid    │ 0000fa02-0000-1000-8000-00805f9b34fb │
+│ resolved_read_notify_uuid             │ 0000fa03-0000-1000-8000-00805f9b34fb │
+│ profile_panel_size                    │ unknown                              │
+│ profile_image_upload_mode             │ png_file                             │
+│ profile_gif_header                    │ timed                                │
+│ profile_write_chunk_fallback          │ 514 bytes                            │
+╰───────────────────────────────────────┴──────────────────────────────────────╯
 
 Expected iDotMatrix endpoints:
 ╭──────────────────────────────────────┬────────────────┬─────────────────────────────┬─────────╮

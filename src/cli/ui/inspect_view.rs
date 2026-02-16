@@ -38,6 +38,119 @@ impl<'a> InspectReportView<'a> {
         Table::grid(["uuid", "kind", "name", "status"], rows)
     }
 
+    fn session_table(&self) -> Table {
+        let metadata = self.report.session_metadata();
+        let profile = metadata.device_profile();
+        let gatt_profile = metadata.gatt_profile().map_or_else(
+            || self.painter.warning("<unknown>"),
+            |value| self.painter.value(value.to_string()),
+        );
+        let write_limit = match metadata.write_without_response_limit() {
+            Some(limit) => self.painter.value(format!("{limit} bytes")),
+            None => self.painter.warning("<unknown>"),
+        };
+        let service_count = self.report.services().len();
+        let characteristic_count: usize = self
+            .report
+            .services()
+            .iter()
+            .map(|service| service.characteristics().len())
+            .sum();
+
+        let write_props = self.endpoint_properties(protocol::EndpointId::WriteCharacteristic);
+        let read_notify_props =
+            self.endpoint_properties(protocol::EndpointId::ReadNotifyCharacteristic);
+
+        Table::key_value(
+            self.painter,
+            vec![
+                (
+                    "required_endpoints_verified",
+                    if metadata.required_endpoints_verified() {
+                        self.painter.success("yes")
+                    } else {
+                        self.painter.warning("no")
+                    },
+                ),
+                ("gatt_profile", gatt_profile),
+                ("write_without_response_limit", write_limit),
+                (
+                    "discovered_services",
+                    self.painter.value(service_count.to_string()),
+                ),
+                (
+                    "discovered_characteristics",
+                    self.painter.value(characteristic_count.to_string()),
+                ),
+                (
+                    "write_characteristic_properties",
+                    write_props.map_or_else(
+                        || self.painter.warning("<missing>"),
+                        |value| self.painter.value(value),
+                    ),
+                ),
+                (
+                    "read_notify_characteristic_properties",
+                    read_notify_props.map_or_else(
+                        || self.painter.warning("<missing>"),
+                        |value| self.painter.value(value),
+                    ),
+                ),
+                (
+                    "resolved_write_characteristic_uuid",
+                    metadata
+                        .resolved_endpoint_uuid(protocol::EndpointId::WriteCharacteristic)
+                        .map_or_else(
+                            || self.painter.warning("<unknown>"),
+                            |value| self.painter.value(value),
+                        ),
+                ),
+                (
+                    "resolved_read_notify_uuid",
+                    metadata
+                        .resolved_endpoint_uuid(protocol::EndpointId::ReadNotifyCharacteristic)
+                        .map_or_else(
+                            || self.painter.warning("<unknown>"),
+                            |value| self.painter.value(value),
+                        ),
+                ),
+                (
+                    "profile_panel_size",
+                    self.painter.value(profile.panel_size().to_string()),
+                ),
+                (
+                    "profile_image_upload_mode",
+                    self.painter.value(profile.image_upload_mode().to_string()),
+                ),
+                (
+                    "profile_gif_header",
+                    self.painter.value(profile.gif_header_profile().to_string()),
+                ),
+                (
+                    "profile_write_chunk_fallback",
+                    self.painter.value(format!(
+                        "{} bytes",
+                        profile.write_without_response_fallback()
+                    )),
+                ),
+            ],
+        )
+    }
+
+    fn endpoint_properties(&self, endpoint: protocol::EndpointId) -> Option<String> {
+        let expected_uuid = self
+            .report
+            .session_metadata()
+            .resolved_endpoint_uuid(endpoint)
+            .unwrap_or_else(|| protocol::endpoint_metadata(endpoint).uuid());
+        self.report
+            .services()
+            .iter()
+            .flat_map(|service| service.characteristics().iter())
+            .find(|characteristic| characteristic.uuid().eq_ignore_ascii_case(expected_uuid))
+            .map(|characteristic| characteristic.properties().join(","))
+    }
+
     fn services_table(&self) -> Table {
         let mut rows = Vec::new();
         for service in self.report.services() {
@@ -87,6 +200,9 @@ impl Display for InspectReportView<'_> {
         write!(f, "{}", self.painter.heading("Connected device:"))?;
         write!(f, "\n{device}")?;
         writeln!(f)?;
+        write!(f, "\n{}", self.painter.heading("Session metadata:"))?;
+        write!(f, "\n{}", self.session_table())?;
+        writeln!(f)?;
         write!(
             f,
             "\n{}",
@@ -103,7 +219,10 @@ impl Display for InspectReportView<'_> {
 mod tests {
     use insta::assert_snapshot;
 
-    use crate::hw::{CharacteristicInfo, EndpointPresence, FoundDevice, ServiceInfo};
+    use crate::hw::{
+        CharacteristicInfo, DeviceProfile, EndpointPresence, FoundDevice, GifHeaderProfile,
+        ImageUploadMode, PanelSize, ServiceInfo, SessionMetadata,
+    };
     use crate::protocol;
 
     use super::*;
@@ -133,7 +252,21 @@ mod tests {
         for endpoint in protocol::known_endpoints() {
             presence.insert(endpoint, true);
         }
-        InspectReport::new(device, services, EndpointPresence::new(presence))
+        InspectReport::new(
+            device,
+            services,
+            EndpointPresence::new(presence),
+            SessionMetadata::new(
+                true,
+                Some(514),
+                DeviceProfile::new(
+                    PanelSize::Unknown,
+                    GifHeaderProfile::Timed,
+                    ImageUploadMode::PngFile,
+                    512,
+                ),
+            ),
+        )
     }
 
     #[test]
@@ -160,7 +293,21 @@ mod tests {
             vec![],
         )];
         let presence = protocol::empty_presence_map();
-        let report = InspectReport::new(device, services, EndpointPresence::new(presence));
+        let report = InspectReport::new(
+            device,
+            services,
+            EndpointPresence::new(presence),
+            SessionMetadata::new(
+                false,
+                None,
+                DeviceProfile::new(
+                    PanelSize::Unknown,
+                    GifHeaderProfile::Timed,
+                    ImageUploadMode::PngFile,
+                    512,
+                ),
+            ),
+        );
         let painter = Painter::new(false);
         assert_snapshot!(
             "inspect_service_no_characteristics",

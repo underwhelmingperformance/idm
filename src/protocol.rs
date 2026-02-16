@@ -74,14 +74,6 @@ pub(crate) fn known_endpoints() -> impl Iterator<Item = EndpointId> {
     EndpointId::iter()
 }
 
-/// Resolves a UUID into a known endpoint ID.
-pub(crate) fn endpoint_for_uuid(uuid: &str) -> Option<EndpointId> {
-    ENDPOINTS_BY_ID
-        .iter()
-        .find(|(_, metadata)| metadata.uuid().eq_ignore_ascii_case(uuid))
-        .map(|(endpoint, _)| *endpoint)
-}
-
 /// Creates a presence map initialised with all known endpoints set to `false`.
 pub(crate) fn empty_presence_map() -> HashMap<EndpointId, bool> {
     known_endpoints()
@@ -124,9 +116,4 @@ mod tests {
         assert_eq!("iDotMatrix write data", write.name());
     }
 
-    #[test]
-    fn endpoint_lookup_by_uuid_is_case_insensitive() {
-        let found = endpoint_for_uuid("0000FA03-0000-1000-8000-00805F9B34FB");
-        assert_eq!(Some(EndpointId::ReadNotifyCharacteristic), found);
-    }
 }

@@ -3,11 +3,10 @@ use std::time::Duration;
 use bon::Builder;
 use clap::{Parser, Subcommand};
 
+use crate::cli::control::ControlArgs;
 use crate::cli::listen::ListenArgs;
 use crate::error::{CliConfigError, FixtureError};
-use crate::hw::{
-    FakeBackendConfig, HardwareBackend, HexPayload, NotificationPayloads, ScanFixture,
-};
+use crate::hw::{FakeBackendConfig, HexPayload, NotificationPayloads, ScanFixture};
 
 /// Command-line options for the iDotMatrix BLE tool.
 #[derive(Debug, Parser)]
@@ -71,19 +70,13 @@ impl Args {
         self.fake_discovery_delay = Some(discovery_delay);
         self
     }
-}
 
-/// Runtime arguments resolved from parsed CLI input.
-#[derive(Debug)]
-pub(crate) struct RuntimeArgs {
-    pub(crate) backend: HardwareBackend,
-    pub(crate) command: Command,
-}
-
-impl TryFrom<Args> for RuntimeArgs {
-    type Error = CliConfigError;
-
-    fn try_from(args: Args) -> Result<Self, Self::Error> {
+    /// Splits parsed CLI arguments into command and optional fake-client settings.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if CLI backend configuration is invalid.
+    pub fn into_command_and_fake_args(self) -> anyhow::Result<(Command, Option<FakeArgs>)> {
         let Args {
             fake,
             fake_scan,
@@ -91,24 +84,23 @@ impl TryFrom<Args> for RuntimeArgs {
             fake_notifications,
             fake_discovery_delay,
             command,
-        } = args;
+        } = self;
 
-        let backend = if fake {
+        let fake_args = if fake {
             let Some(scan_fixture) = fake_scan else {
-                return Err(CliConfigError::MissingFakeScanFixture);
+                return Err(CliConfigError::MissingFakeScanFixture.into());
             };
-            let config = FakeBackendConfig::builder()
-                .scan_fixture(scan_fixture)
-                .maybe_initial_read(fake_read)
-                .maybe_notifications(fake_notifications)
-                .discovery_delay(fake_discovery_delay.unwrap_or(Duration::ZERO))
-                .build();
-            HardwareBackend::Fake(config)
+            Some(FakeArgs {
+                scan_fixture,
+                initial_read: fake_read,
+                notifications: fake_notifications,
+                discovery_delay: fake_discovery_delay.unwrap_or(Duration::ZERO),
+            })
         } else {
-            HardwareBackend::Real
+            None
         };
 
-        Ok(Self { backend, command })
+        Ok((command, fake_args))
     }
 }
 
@@ -125,6 +117,24 @@ pub struct FakeArgs {
     discovery_delay: Duration,
 }
 
+impl FakeArgs {
+    pub(crate) fn into_backend_config(self) -> FakeBackendConfig {
+        let Self {
+            scan_fixture,
+            initial_read,
+            notifications,
+            discovery_delay,
+        } = self;
+
+        FakeBackendConfig::builder()
+            .scan_fixture(scan_fixture)
+            .maybe_initial_read(initial_read)
+            .maybe_notifications(notifications)
+            .discovery_delay(discovery_delay)
+            .build()
+    }
+}
+
 /// Supported CLI commands.
 #[derive(Debug, Subcommand)]
 pub enum Command {
@@ -132,6 +142,8 @@ pub enum Command {
     Inspect,
     /// Scan until the first iDotMatrix device is found, connect, read once, then listen for notifications.
     Listen(ListenArgs),
+    /// Scan until the first iDotMatrix device is found, connect, then send one control command.
+    Control(ControlArgs),
 }
 
 fn parse_duration(value: &str) -> Result<Duration, String> {
@@ -176,7 +188,7 @@ mod tests {
     }
 
     #[test]
-    fn fake_mode_builds_fake_backend_config() {
+    fn fake_mode_builds_fake_settings() {
         let cli = Args::try_parse_from([
             "idm",
             "--fake",
@@ -186,13 +198,10 @@ mod tests {
         ])
         .expect("valid fake arguments should parse");
 
-        let runtime: RuntimeArgs = cli
-            .try_into()
-            .expect("valid fake arguments should resolve backend");
-        let RuntimeArgs {
-            backend,
-            command: _,
-        } = runtime;
-        assert_matches!(backend, HardwareBackend::Fake(_));
+        let (command, fake_args) = cli
+            .into_command_and_fake_args()
+            .expect("valid fake arguments should resolve fake settings");
+        assert_matches!(command, Command::Inspect);
+        assert_matches!(fake_args, Some(_));
     }
 }

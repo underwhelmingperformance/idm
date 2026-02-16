@@ -2,6 +2,9 @@ use std::collections::HashMap;
 
 use crate::protocol::EndpointId;
 
+use super::DeviceProfile;
+use super::session::GattProfile;
+
 /// A discovered BLE peripheral that matched a scan predicate.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct FoundDevice {
@@ -60,7 +63,7 @@ impl FoundDevice {
 }
 
 /// A characteristic description discovered on a connected peripheral.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct CharacteristicInfo {
     uuid: String,
     properties: Vec<String>,
@@ -86,7 +89,7 @@ impl CharacteristicInfo {
 }
 
 /// A GATT service with discovered characteristics.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct ServiceInfo {
     uuid: String,
     primary: bool,
@@ -127,7 +130,7 @@ impl ServiceInfo {
 }
 
 /// Presence flags for the reverse-engineered iDotMatrix endpoints.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct EndpointPresence {
     by_endpoint: HashMap<EndpointId, bool>,
 }
@@ -145,12 +148,82 @@ impl EndpointPresence {
     }
 }
 
+/// Connection metadata discovered during session setup.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct SessionMetadata {
+    required_endpoints_verified: bool,
+    write_without_response_limit: Option<usize>,
+    device_profile: DeviceProfile,
+    gatt_profile: Option<GattProfile>,
+    resolved_endpoint_uuids: HashMap<EndpointId, String>,
+}
+
+impl SessionMetadata {
+    /// Creates session metadata.
+    pub(crate) fn new(
+        required_endpoints_verified: bool,
+        write_without_response_limit: Option<usize>,
+        device_profile: DeviceProfile,
+    ) -> Self {
+        Self {
+            required_endpoints_verified,
+            write_without_response_limit,
+            device_profile,
+            gatt_profile: None,
+            resolved_endpoint_uuids: HashMap::new(),
+        }
+    }
+
+    pub(crate) fn with_endpoint_resolution(
+        mut self,
+        gatt_profile: GattProfile,
+        resolved_endpoint_uuids: HashMap<EndpointId, String>,
+    ) -> Self {
+        self.gatt_profile = Some(gatt_profile);
+        self.resolved_endpoint_uuids = resolved_endpoint_uuids;
+        self
+    }
+
+    /// Returns whether required iDotMatrix endpoints were verified at connect time.
+    #[must_use]
+    pub fn required_endpoints_verified(&self) -> bool {
+        self.required_endpoints_verified
+    }
+
+    /// Returns the negotiated write-without-response payload limit, when known.
+    #[must_use]
+    pub fn write_without_response_limit(&self) -> Option<usize> {
+        self.write_without_response_limit
+    }
+
+    /// Returns the resolved device profile used for handler behaviour.
+    #[must_use]
+    pub fn device_profile(&self) -> DeviceProfile {
+        self.device_profile
+    }
+
+    /// Returns the resolved GATT profile selected during session setup.
+    #[must_use]
+    pub fn gatt_profile(&self) -> Option<GattProfile> {
+        self.gatt_profile
+    }
+
+    /// Returns the concrete UUID bound to an endpoint role for this session.
+    #[must_use]
+    pub fn resolved_endpoint_uuid(&self, endpoint: EndpointId) -> Option<&str> {
+        self.resolved_endpoint_uuids
+            .get(&endpoint)
+            .map(String::as_str)
+    }
+}
+
 /// Result of inspecting a connected iDotMatrix peripheral.
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq)]
 pub struct InspectReport {
     device: FoundDevice,
     services: Vec<ServiceInfo>,
     endpoint_presence: EndpointPresence,
+    session_metadata: SessionMetadata,
 }
 
 impl InspectReport {
@@ -159,11 +232,13 @@ impl InspectReport {
         device: FoundDevice,
         services: Vec<ServiceInfo>,
         endpoint_presence: EndpointPresence,
+        session_metadata: SessionMetadata,
     ) -> Self {
         Self {
             device,
             services,
             endpoint_presence,
+            session_metadata,
         }
     }
 
@@ -184,10 +259,16 @@ impl InspectReport {
     pub fn endpoint_presence(&self) -> &EndpointPresence {
         &self.endpoint_presence
     }
+
+    /// Returns session metadata discovered while connecting.
+    #[must_use]
+    pub fn session_metadata(&self) -> &SessionMetadata {
+        &self.session_metadata
+    }
 }
 
 /// Why a listening session ended.
-#[derive(Debug, Eq, PartialEq, derive_more::Display)]
+#[derive(Debug, Clone, Eq, PartialEq, derive_more::Display)]
 pub enum ListenStopReason {
     /// The listener reached the requested max notification count.
     #[display("reached max notifications ({_0})")]
@@ -198,6 +279,35 @@ pub enum ListenStopReason {
     /// The notification stream ended naturally.
     #[display("notification stream closed")]
     NotificationStreamClosed,
+}
+
+/// Summary of a notification stream run.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct NotificationRunSummary {
+    received_notifications: usize,
+    stop_reason: ListenStopReason,
+}
+
+impl NotificationRunSummary {
+    /// Creates a notification run summary.
+    pub(crate) fn new(received_notifications: usize, stop_reason: ListenStopReason) -> Self {
+        Self {
+            received_notifications,
+            stop_reason,
+        }
+    }
+
+    /// Returns the number of notifications received.
+    #[must_use]
+    pub fn received_notifications(&self) -> usize {
+        self.received_notifications
+    }
+
+    /// Returns why notification listening ended.
+    #[must_use]
+    pub fn stop_reason(&self) -> &ListenStopReason {
+        &self.stop_reason
+    }
 }
 
 /// Summary returned when a listen session exits.

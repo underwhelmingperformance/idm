@@ -73,14 +73,21 @@ impl Display for ListenReadyView<'_> {
 pub(crate) struct ListenNotificationView<'a> {
     index: usize,
     payload: &'a [u8],
+    event_label: Option<String>,
     painter: &'a Painter,
 }
 
 impl<'a> ListenNotificationView<'a> {
-    pub(crate) fn new(index: usize, payload: &'a [u8], painter: &'a Painter) -> Self {
+    pub(crate) fn new(
+        index: usize,
+        payload: &'a [u8],
+        event_label: Option<String>,
+        painter: &'a Painter,
+    ) -> Self {
         Self {
             index,
             payload,
+            event_label,
             painter,
         }
     }
@@ -89,9 +96,14 @@ impl<'a> ListenNotificationView<'a> {
 impl Display for ListenNotificationView<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let index_label = self.painter.muted(format!("[{:04}]", self.index));
+        let event_label = self
+            .event_label
+            .as_ref()
+            .map(|label| self.painter.muted(format!("({label}) ")))
+            .unwrap_or_default();
         write!(
             f,
-            "{index_label} {}",
+            "{index_label} {event_label}{}",
             self.painter.value(format_hex(self.payload))
         )
     }
@@ -164,8 +176,17 @@ mod tests {
     fn notification_formats_index_and_hex() {
         let painter = Painter::new(false);
         let payload = [0x05, 0x00, 0x01];
-        let view = ListenNotificationView::new(42, &payload, &painter);
+        let view = ListenNotificationView::new(42, &payload, None, &painter);
         assert_snapshot!("notification_line", view.to_string());
+    }
+
+    #[test]
+    fn notification_formats_with_event_label() {
+        let painter = Painter::new(false);
+        let payload = [0x05, 0x00, 0x01];
+        let view =
+            ListenNotificationView::new(42, &payload, Some("chunk_ack".to_string()), &painter);
+        assert_snapshot!("notification_line_with_event", view.to_string());
     }
 
     #[rstest]
