@@ -343,7 +343,7 @@ fn ensure_ambiguous_shape_is_resolved(
     }
 
     Err(InteractionError::AmbiguousShapeSelectionRequired {
-        device_id: device.device_id().to_string(),
+        device_id: device.device_id_display().to_string(),
         shape: identity.shape,
     })
 }

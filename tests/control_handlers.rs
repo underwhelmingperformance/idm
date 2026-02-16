@@ -82,7 +82,8 @@ async fn text_upload_handler_supports_notify_ack_pacing() -> anyhow::Result<()> 
 #[tokio::test]
 async fn text_upload_rejects_unresolved_text_path_routing_profile() -> anyhow::Result<()> {
     let fake_args = idm::FakeArgs::builder()
-        .scan_fixture("hci0|AA:BB:CC|IDM-Unknown|-43|5452007042010200010520002000")?
+        .scan_fixture("hci0|AA:BB:CC|IDM-Unknown|-43|5452007042010200090920002000")?
+        .initial_read("09000180020A016300")?
         .build();
     let client = idm::fake_hardware_client(fake_args);
     let session = client.connect_first_device("IDM-").await?;

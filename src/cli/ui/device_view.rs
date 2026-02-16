@@ -1,7 +1,10 @@
 use std::fmt::{self, Display, Formatter};
 
+use idm_macros::DiagnosticsSection;
+
 use crate::hw::FoundDevice;
-use crate::utils::format_rssi;
+use crate::hw::diagnostic_value::{Rssi, UnknownOr};
+use crate::hw::diagnostics::DiagnosticsSection as _;
 
 use super::painter::Painter;
 use super::table::Table;
@@ -18,18 +21,57 @@ impl<'a> DeviceView<'a> {
     }
 }
 
+#[derive(Debug, DiagnosticsSection)]
+#[diagnostics(id = "connected_device", section = "Connected device")]
+struct ConnectedDeviceSection {
+    #[diagnostic(name = "Adapter")]
+    adapter: AdapterName,
+    #[diagnostic(name = "Device ID")]
+    device_id: DeviceIdentifier,
+    #[diagnostic(name = "Name")]
+    name: UnknownOr<String>,
+    #[diagnostic(name = "RSSI")]
+    rssi: Rssi,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct AdapterName(String);
+
+impl Display for AdapterName {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+struct DeviceIdentifier(String);
+
+impl Display for DeviceIdentifier {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<&FoundDevice> for ConnectedDeviceSection {
+    fn from(device: &FoundDevice) -> Self {
+        Self {
+            adapter: AdapterName(device.adapter_name().to_string()),
+            device_id: DeviceIdentifier(device.device_id_display().to_string()),
+            name: UnknownOr(device.local_name().map(str::to_owned)),
+            rssi: Rssi(device.rssi()),
+        }
+    }
+}
+
 impl Display for DeviceView<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
-        let name = self.device.local_name().unwrap_or("<unknown>");
-        let table = Table::key_value(
-            self.painter,
-            vec![
-                ("adapter", self.painter.value(self.device.adapter_name())),
-                ("device_id", self.painter.value(self.device.device_id())),
-                ("name", self.painter.value(name)),
-                ("rssi", self.painter.value(format_rssi(self.device.rssi()))),
-            ],
-        );
+        let section = ConnectedDeviceSection::from(self.device);
+        let section_rows = section.rows();
+        let rows = section_rows
+            .iter()
+            .map(|row| (row.label(), self.painter.value(row.value())))
+            .collect();
+        let table = Table::key_value(self.painter, rows);
         write!(f, "{table}")
     }
 }

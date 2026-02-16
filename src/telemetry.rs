@@ -57,7 +57,12 @@ fn initialise_tracing_once(
             .try_init()?;
     } else {
         tracing_subscriber::registry()
-            .with(fmt::layer().json().with_target(false).with_filter(log_filter))
+            .with(
+                fmt::layer()
+                    .json()
+                    .with_target(false)
+                    .with_filter(log_filter),
+            )
             .with(OpenTelemetryLayer::new(tracer))
             .try_init()?;
     }

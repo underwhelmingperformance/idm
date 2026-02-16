@@ -1,13 +1,12 @@
 ---
 source: src/cli/ui/device_view.rs
-assertion_line: 56
-expression: "DeviceView::new(&dev, painter).to_string()"
+expression: "DeviceView::new(&dev, &painter).to_string()"
 ---
 ╭───────────┬───────────╮
 │ field     │ value     │
 ├───────────┼───────────┤
-│ adapter   │ hci0      │
-│ device_id │ AA:BB:CC  │
-│ name      │ IDM-Clock │
-│ rssi      │ -43       │
+│ Adapter   │ hci0      │
+│ Device ID │ AA:BB:CC  │
+│ Name      │ IDM-Clock │
+│ RSSI      │ -43       │
 ╰───────────┴───────────╯

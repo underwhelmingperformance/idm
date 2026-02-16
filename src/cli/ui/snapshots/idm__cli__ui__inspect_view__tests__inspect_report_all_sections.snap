@@ -6,32 +6,32 @@ Connected device:
 ╭───────────┬───────────╮
 │ field     │ value     │
 ├───────────┼───────────┤
-│ adapter   │ hci0      │
-│ device_id │ AA:BB:CC  │
-│ name      │ IDM-Clock │
-│ rssi      │ -43       │
+│ Adapter   │ hci0      │
+│ Device ID │ AA:BB:CC  │
+│ Name      │ IDM-Clock │
+│ RSSI      │ -43       │
 ╰───────────┴───────────╯
 
 Session metadata:
 ╭───────────────────────────────────────┬─────────────╮
 │ field                                 │ value       │
 ├───────────────────────────────────────┼─────────────┤
-│ required_endpoints_verified           │ yes         │
-│ gatt_profile                          │ <unknown>   │
-│ write_without_response_limit          │ 514 bytes   │
-│ discovered_services                   │ 1           │
-│ discovered_characteristics            │ 2           │
-│ write_characteristic_properties       │ write       │
-│ read_notify_characteristic_properties │ read,notify │
-│ resolved_write_characteristic_uuid    │ <unknown>   │
-│ resolved_read_notify_uuid             │ <unknown>   │
-│ profile_panel_size                    │ unknown     │
-│ profile_led_type                      │ <unknown>   │
-│ profile_text_path                     │ <unknown>   │
-│ profile_joint_mode                    │ <none>      │
-│ profile_image_upload_mode             │ png_file    │
-│ profile_gif_header                    │ timed       │
-│ profile_write_chunk_fallback          │ 512 bytes   │
+│ Required endpoints verified           │ yes         │
+│ GATT profile                          │ <unknown>   │
+│ Write-without-response limit          │ 514 bytes   │
+│ Discovered services                   │ 1           │
+│ Discovered characteristics            │ 2           │
+│ Write characteristic properties       │ write       │
+│ Read/notify characteristic properties │ read,notify │
+│ Resolved write characteristic UUID    │ <unknown>   │
+│ Resolved read/notify UUID             │ <unknown>   │
+│ Profile panel size                    │ unknown     │
+│ Profile LED type                      │ <unknown>   │
+│ Profile text path                     │ <unknown>   │
+│ Profile joint mode                    │ <none>      │
+│ Profile image upload mode             │ png_file    │
+│ Profile GIF header                    │ timed       │
+│ Profile write chunk fallback          │ 512 bytes   │
 ╰───────────────────────────────────────┴─────────────╯
 
 Expected iDotMatrix endpoints:

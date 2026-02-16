@@ -1,9 +1,12 @@
 mod btleplug_backend;
 mod device_profile_resolver;
+pub(crate) mod diagnostic_value;
+pub(crate) mod diagnostics;
 mod fake_backend;
 mod hardware;
 mod model;
 mod model_overrides;
+mod model_resolution_diagnostics;
 mod profile;
 mod scan_capabilities;
 mod scan_model;

@@ -16,10 +16,12 @@ use super::DeviceProfile;
 use super::hardware::{ConnectedBleSession, WriteMode, missing_required_endpoints};
 use super::model::{
     CharacteristicInfo, EndpointPresence, FoundDevice, InspectReport, LedInfoQueryOutcome,
-    ListenStopReason, ManufacturerDataRecord, ModelResolutionDebug, NotificationRunSummary,
-    ScanPropertiesDebug, ServiceDataRecord, ServiceInfo, SessionMetadata,
+    ListenStopReason, NotificationRunSummary, ServiceInfo, SessionMetadata,
 };
 use super::model_overrides::{ModelOverrideStore, ModelResolutionConfig, is_supported_led_type};
+use super::model_resolution_diagnostics::{
+    ManufacturerDataRecord, ScanPropertiesDebug, ServiceDataRecord, model_resolution_diagnostics,
+};
 use super::profile::{resolve_device_profile, resolve_device_routing_profile};
 use super::scan_model::{ScanIdentity, ScanModelHandler};
 use super::session::negotiate_session_endpoints;
@@ -158,7 +160,7 @@ impl BtleplugBackend {
 
                     let device = FoundDevice::new(
                         adapter.name.clone(),
-                        format!("{:?}", peripheral.id()),
+                        peripheral.id().to_string(),
                         local_name,
                         rssi,
                     );
@@ -169,7 +171,10 @@ impl BtleplugBackend {
                         }
                         None => device,
                     };
-                    info!(device_id = %device.device_id(), "connected to matching peripheral");
+                    info!(
+                        device_id = %device.device_id_display(),
+                        "connected to matching peripheral"
+                    );
                     return Ok(ConnectedPeripheral {
                         peripheral,
                         device,
@@ -253,9 +258,9 @@ impl BtleplugBackend {
             write_without_response_limit,
             device_routing_profile,
         );
-        let model_resolution_debug = ModelResolutionDebug::new(
+        let connection_diagnostics = model_resolution_diagnostics(
             connected.device.scan_identity().copied(),
-            Some(connected.scan_properties_debug.clone()),
+            Some(&connected.scan_properties_debug),
             led_info_query.outcome,
             led_info_query.write_modes_attempted,
             led_info_query.sync_time_fallback_attempted,
@@ -264,7 +269,7 @@ impl BtleplugBackend {
         let session_metadata =
             SessionMetadata::new(true, write_without_response_limit, device_profile)
                 .with_device_routing_profile(device_routing_profile)
-                .with_model_resolution_debug(model_resolution_debug)
+                .with_connection_diagnostics(connection_diagnostics)
                 .with_endpoint_resolution(
                     negotiated_endpoints.gatt_profile,
                     negotiated_endpoints.endpoint_uuids.clone(),
@@ -344,7 +349,7 @@ fn ensure_ambiguous_shape_is_resolved(
     }
 
     Err(InteractionError::AmbiguousShapeSelectionRequired {
-        device_id: device.device_id().to_string(),
+        device_id: device.device_id_display().to_string(),
         shape: identity.shape,
     })
 }

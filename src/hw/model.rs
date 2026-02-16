@@ -1,7 +1,9 @@
 use std::collections::HashMap;
+use std::fmt::Display;
 
 use crate::protocol::EndpointId;
 
+use super::diagnostics::ConnectionDiagnostics;
 use super::scan_model::{ModelProfile, ScanIdentity};
 use super::session::GattProfile;
 use super::{DeviceProfile, DeviceRoutingProfile};
@@ -10,11 +12,27 @@ use super::{DeviceProfile, DeviceRoutingProfile};
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct FoundDevice {
     adapter_name: String,
-    device_id: String,
+    device_id: DeviceId,
     local_name: Option<String>,
     rssi: Option<i16>,
     scan_identity: Option<ScanIdentity>,
     model_profile: Option<ModelProfile>,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq, derive_more::Display)]
+#[display("{}", _0)]
+struct DeviceId(String);
+
+impl DeviceId {
+    fn as_raw_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for DeviceId {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
 }
 
 impl FoundDevice {
@@ -27,7 +45,7 @@ impl FoundDevice {
     ) -> Self {
         Self {
             adapter_name,
-            device_id,
+            device_id: DeviceId::from(device_id),
             local_name,
             rssi,
             scan_identity: None,
@@ -44,6 +62,12 @@ impl FoundDevice {
     /// Returns the backend-specific device identifier.
     #[must_use]
     pub fn device_id(&self) -> &str {
+        self.device_id.as_raw_str()
+    }
+
+    /// Returns the backend-specific device identifier formatted for display.
+    #[must_use]
+    pub fn device_id_display(&self) -> impl Display + '_ {
         &self.device_id
     }
 
@@ -190,138 +214,6 @@ pub(crate) enum LedInfoQueryOutcome {
     ParsedNotifyAfterSyncTime,
 }
 
-/// Diagnostics for scan/model resolution performed during connect.
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) struct ManufacturerDataRecord {
-    company_id: u16,
-    payload: Vec<u8>,
-}
-
-impl ManufacturerDataRecord {
-    pub(crate) fn new(company_id: u16, payload: Vec<u8>) -> Self {
-        Self {
-            company_id,
-            payload,
-        }
-    }
-
-    pub(crate) fn company_id(&self) -> u16 {
-        self.company_id
-    }
-
-    pub(crate) fn payload(&self) -> &[u8] {
-        &self.payload
-    }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) struct ServiceDataRecord {
-    uuid: String,
-    payload: Vec<u8>,
-}
-
-impl ServiceDataRecord {
-    pub(crate) fn new(uuid: String, payload: Vec<u8>) -> Self {
-        Self { uuid, payload }
-    }
-
-    pub(crate) fn uuid(&self) -> &str {
-        &self.uuid
-    }
-
-    pub(crate) fn payload(&self) -> &[u8] {
-        &self.payload
-    }
-}
-
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) struct ScanPropertiesDebug {
-    manufacturer_data: Vec<ManufacturerDataRecord>,
-    service_data: Vec<ServiceDataRecord>,
-    service_uuids: Vec<String>,
-}
-
-impl ScanPropertiesDebug {
-    pub(crate) fn new(
-        manufacturer_data: Vec<ManufacturerDataRecord>,
-        service_data: Vec<ServiceDataRecord>,
-        service_uuids: Vec<String>,
-    ) -> Self {
-        Self {
-            manufacturer_data,
-            service_data,
-            service_uuids,
-        }
-    }
-
-    pub(crate) fn manufacturer_data(&self) -> &[ManufacturerDataRecord] {
-        &self.manufacturer_data
-    }
-
-    pub(crate) fn service_data(&self) -> &[ServiceDataRecord] {
-        &self.service_data
-    }
-
-    pub(crate) fn service_uuids(&self) -> &[String] {
-        &self.service_uuids
-    }
-}
-
-/// Diagnostics for scan/model resolution performed during connect.
-#[derive(Debug, Clone, Eq, PartialEq)]
-pub(crate) struct ModelResolutionDebug {
-    scan_identity: Option<ScanIdentity>,
-    scan_properties_debug: Option<ScanPropertiesDebug>,
-    led_info_query_outcome: LedInfoQueryOutcome,
-    led_info_write_modes_attempted: Vec<String>,
-    led_info_sync_time_fallback_attempted: bool,
-    led_info_last_payload: Option<Vec<u8>>,
-}
-
-impl ModelResolutionDebug {
-    pub(crate) fn new(
-        scan_identity: Option<ScanIdentity>,
-        scan_properties_debug: Option<ScanPropertiesDebug>,
-        led_info_query_outcome: LedInfoQueryOutcome,
-        led_info_write_modes_attempted: Vec<String>,
-        led_info_sync_time_fallback_attempted: bool,
-        led_info_last_payload: Option<Vec<u8>>,
-    ) -> Self {
-        Self {
-            scan_identity,
-            scan_properties_debug,
-            led_info_query_outcome,
-            led_info_write_modes_attempted,
-            led_info_sync_time_fallback_attempted,
-            led_info_last_payload,
-        }
-    }
-
-    pub(crate) fn scan_identity(&self) -> Option<ScanIdentity> {
-        self.scan_identity
-    }
-
-    pub(crate) fn scan_properties_debug(&self) -> Option<&ScanPropertiesDebug> {
-        self.scan_properties_debug.as_ref()
-    }
-
-    pub(crate) fn led_info_query_outcome(&self) -> &LedInfoQueryOutcome {
-        &self.led_info_query_outcome
-    }
-
-    pub(crate) fn led_info_write_modes_attempted(&self) -> &[String] {
-        &self.led_info_write_modes_attempted
-    }
-
-    pub(crate) fn led_info_sync_time_fallback_attempted(&self) -> bool {
-        self.led_info_sync_time_fallback_attempted
-    }
-
-    pub(crate) fn led_info_last_payload(&self) -> Option<&[u8]> {
-        self.led_info_last_payload.as_deref()
-    }
-}
-
 /// Connection metadata discovered during session setup.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct SessionMetadata {
@@ -329,7 +221,7 @@ pub struct SessionMetadata {
     write_without_response_limit: Option<usize>,
     device_profile: DeviceProfile,
     device_routing_profile: Option<DeviceRoutingProfile>,
-    model_resolution_debug: Option<ModelResolutionDebug>,
+    connection_diagnostics: ConnectionDiagnostics,
     gatt_profile: Option<GattProfile>,
     resolved_endpoint_uuids: HashMap<EndpointId, String>,
 }
@@ -346,7 +238,7 @@ impl SessionMetadata {
             write_without_response_limit,
             device_profile,
             device_routing_profile: None,
-            model_resolution_debug: None,
+            connection_diagnostics: ConnectionDiagnostics::default(),
             gatt_profile: None,
             resolved_endpoint_uuids: HashMap::new(),
         }
@@ -360,11 +252,11 @@ impl SessionMetadata {
         self
     }
 
-    pub(crate) fn with_model_resolution_debug(
+    pub(crate) fn with_connection_diagnostics(
         mut self,
-        model_resolution_debug: ModelResolutionDebug,
+        connection_diagnostics: ConnectionDiagnostics,
     ) -> Self {
-        self.model_resolution_debug = Some(model_resolution_debug);
+        self.connection_diagnostics = connection_diagnostics;
         self
     }
 
@@ -402,8 +294,8 @@ impl SessionMetadata {
         self.device_routing_profile
     }
 
-    pub(crate) fn model_resolution_debug(&self) -> Option<&ModelResolutionDebug> {
-        self.model_resolution_debug.as_ref()
+    pub(crate) fn connection_diagnostics(&self) -> &ConnectionDiagnostics {
+        &self.connection_diagnostics
     }
 
     /// Returns the resolved GATT profile selected during session setup.
@@ -561,5 +453,34 @@ impl ListenSummary {
     #[must_use]
     pub fn stop_reason(&self) -> &ListenStopReason {
         &self.stop_reason
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+    use rstest::rstest;
+
+    use super::FoundDevice;
+
+    #[rstest]
+    #[case(
+        "ff97e5d8-202b-4ca6-5e10-633ced33cda8",
+        "ff97e5d8-202b-4ca6-5e10-633ced33cda8"
+    )]
+    #[case("AA:BB:CC", "AA:BB:CC")]
+    fn device_id_display_formats_backend_identifier(
+        #[case] raw_device_id: &str,
+        #[case] expected_display: &str,
+    ) {
+        let device = FoundDevice::new(
+            "adapter".to_string(),
+            raw_device_id.to_string(),
+            Some("IDM-Device".to_string()),
+            Some(-50),
+        );
+
+        assert_eq!(raw_device_id, device.device_id());
+        assert_eq!(expected_display, device.device_id_display().to_string());
     }
 }

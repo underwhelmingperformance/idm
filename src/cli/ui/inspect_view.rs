@@ -1,8 +1,11 @@
 use std::fmt::{self, Display, Formatter};
 
-use crate::hw::InspectReport;
+use idm_macros::DiagnosticsSection;
+
+use crate::hw::diagnostic_value::{Bytes, MissingOr, NoneOr, UnknownOr, YesNo};
+use crate::hw::diagnostics::DiagnosticRow;
+use crate::hw::{GattProfile, InspectReport, ServiceInfo, TextPath};
 use crate::protocol;
-use crate::utils::format_hex;
 
 use super::device_view::DeviceView;
 use super::painter::Painter;
@@ -12,6 +15,140 @@ use super::table::Table;
 pub(crate) struct InspectReportView<'a> {
     report: &'a InspectReport,
     painter: &'a Painter,
+}
+
+#[derive(Debug, DiagnosticsSection)]
+#[diagnostics(id = "session_metadata", section = "Session metadata")]
+struct SessionMetadataSection {
+    #[diagnostic(name = "Required endpoints verified")]
+    required_endpoints_verified: YesNo,
+    #[diagnostic(name = "GATT profile")]
+    gatt_profile: UnknownOr<GattProfile>,
+    #[diagnostic(name = "Write-without-response limit")]
+    write_without_response_limit: UnknownOr<Bytes>,
+    #[diagnostic(name = "Discovered services")]
+    discovered_services: ServiceCount,
+    #[diagnostic(name = "Discovered characteristics")]
+    discovered_characteristics: CharacteristicCount,
+    #[diagnostic(name = "Write characteristic properties")]
+    write_characteristic_properties: MissingOr<String>,
+    #[diagnostic(name = "Read/notify characteristic properties")]
+    read_notify_characteristic_properties: MissingOr<String>,
+    #[diagnostic(name = "Resolved write characteristic UUID")]
+    resolved_write_characteristic_uuid: UnknownOr<String>,
+    #[diagnostic(name = "Resolved read/notify UUID")]
+    resolved_read_notify_uuid: UnknownOr<String>,
+    #[diagnostic(name = "Profile panel size")]
+    profile_panel_size: crate::hw::PanelSize,
+    #[diagnostic(name = "Profile LED type")]
+    profile_led_type: UnknownOr<u8>,
+    #[diagnostic(name = "Profile text path")]
+    profile_text_path: UnknownOr<TextPath>,
+    #[diagnostic(name = "Profile joint mode")]
+    profile_joint_mode: NoneOr<u8>,
+    #[diagnostic(name = "Profile image upload mode")]
+    profile_image_upload_mode: crate::hw::ImageUploadMode,
+    #[diagnostic(name = "Profile GIF header")]
+    profile_gif_header: crate::hw::GifHeaderProfile,
+    #[diagnostic(name = "Profile write chunk fallback")]
+    profile_write_chunk_fallback: Bytes,
+}
+
+fn endpoint_properties(
+    report: &InspectReport,
+    endpoint: protocol::EndpointId,
+) -> MissingOr<String> {
+    let expected_uuid = report
+        .session_metadata()
+        .resolved_endpoint_uuid(endpoint)
+        .unwrap_or_else(|| protocol::endpoint_metadata(endpoint).uuid());
+
+    MissingOr(
+        report
+            .services()
+            .iter()
+            .flat_map(|service| service.characteristics().iter())
+            .find(|characteristic| characteristic.uuid().eq_ignore_ascii_case(expected_uuid))
+            .map(|characteristic| characteristic.properties().join(",")),
+    )
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+struct ServiceCount(usize);
+
+impl ServiceCount {
+    fn from_services(services: &[ServiceInfo]) -> Self {
+        Self(services.len())
+    }
+}
+
+impl Display for ServiceCount {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+struct CharacteristicCount(usize);
+
+impl CharacteristicCount {
+    fn from_services(services: &[ServiceInfo]) -> Self {
+        Self(
+            services
+                .iter()
+                .map(|service| service.characteristics().len())
+                .sum(),
+        )
+    }
+}
+
+impl Display for CharacteristicCount {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl From<&InspectReport> for SessionMetadataSection {
+    fn from(report: &InspectReport) -> Self {
+        let metadata = report.session_metadata();
+        let profile = metadata.device_profile();
+        let routing_profile = metadata.device_routing_profile();
+
+        Self {
+            required_endpoints_verified: YesNo(metadata.required_endpoints_verified()),
+            gatt_profile: UnknownOr(metadata.gatt_profile()),
+            write_without_response_limit: UnknownOr(
+                metadata.write_without_response_limit().map(Bytes),
+            ),
+            discovered_services: ServiceCount::from_services(report.services()),
+            discovered_characteristics: CharacteristicCount::from_services(report.services()),
+            write_characteristic_properties: endpoint_properties(
+                report,
+                protocol::EndpointId::WriteCharacteristic,
+            ),
+            read_notify_characteristic_properties: endpoint_properties(
+                report,
+                protocol::EndpointId::ReadNotifyCharacteristic,
+            ),
+            resolved_write_characteristic_uuid: UnknownOr(
+                metadata
+                    .resolved_endpoint_uuid(protocol::EndpointId::WriteCharacteristic)
+                    .map(str::to_owned),
+            ),
+            resolved_read_notify_uuid: UnknownOr(
+                metadata
+                    .resolved_endpoint_uuid(protocol::EndpointId::ReadNotifyCharacteristic)
+                    .map(str::to_owned),
+            ),
+            profile_panel_size: profile.panel_size(),
+            profile_led_type: UnknownOr(routing_profile.and_then(|value| value.led_type)),
+            profile_text_path: UnknownOr(routing_profile.and_then(|value| value.text_path)),
+            profile_joint_mode: NoneOr(routing_profile.and_then(|value| value.joint_mode)),
+            profile_image_upload_mode: profile.image_upload_mode(),
+            profile_gif_header: profile.gif_header_profile(),
+            profile_write_chunk_fallback: Bytes(profile.write_without_response_fallback()),
+        }
+    }
 }
 
 impl<'a> InspectReportView<'a> {
@@ -40,144 +177,9 @@ impl<'a> InspectReportView<'a> {
     }
 
     fn session_table(&self) -> Table {
-        let metadata = self.report.session_metadata();
-        let profile = metadata.device_profile();
-        let routing_profile = metadata.device_routing_profile();
-        let gatt_profile = metadata.gatt_profile().map_or_else(
-            || self.painter.warning("<unknown>"),
-            |value| self.painter.value(value.to_string()),
-        );
-        let write_limit = match metadata.write_without_response_limit() {
-            Some(limit) => self.painter.value(format!("{limit} bytes")),
-            None => self.painter.warning("<unknown>"),
-        };
-        let service_count = self.report.services().len();
-        let characteristic_count: usize = self
-            .report
-            .services()
-            .iter()
-            .map(|service| service.characteristics().len())
-            .sum();
+        let section = SessionMetadataSection::from(self.report);
 
-        let write_props = self.endpoint_properties(protocol::EndpointId::WriteCharacteristic);
-        let read_notify_props =
-            self.endpoint_properties(protocol::EndpointId::ReadNotifyCharacteristic);
-
-        Table::key_value(
-            self.painter,
-            vec![
-                (
-                    "required_endpoints_verified",
-                    if metadata.required_endpoints_verified() {
-                        self.painter.success("yes")
-                    } else {
-                        self.painter.warning("no")
-                    },
-                ),
-                ("gatt_profile", gatt_profile),
-                ("write_without_response_limit", write_limit),
-                (
-                    "discovered_services",
-                    self.painter.value(service_count.to_string()),
-                ),
-                (
-                    "discovered_characteristics",
-                    self.painter.value(characteristic_count.to_string()),
-                ),
-                (
-                    "write_characteristic_properties",
-                    write_props.map_or_else(
-                        || self.painter.warning("<missing>"),
-                        |value| self.painter.value(value),
-                    ),
-                ),
-                (
-                    "read_notify_characteristic_properties",
-                    read_notify_props.map_or_else(
-                        || self.painter.warning("<missing>"),
-                        |value| self.painter.value(value),
-                    ),
-                ),
-                (
-                    "resolved_write_characteristic_uuid",
-                    metadata
-                        .resolved_endpoint_uuid(protocol::EndpointId::WriteCharacteristic)
-                        .map_or_else(
-                            || self.painter.warning("<unknown>"),
-                            |value| self.painter.value(value),
-                        ),
-                ),
-                (
-                    "resolved_read_notify_uuid",
-                    metadata
-                        .resolved_endpoint_uuid(protocol::EndpointId::ReadNotifyCharacteristic)
-                        .map_or_else(
-                            || self.painter.warning("<unknown>"),
-                            |value| self.painter.value(value),
-                        ),
-                ),
-                (
-                    "profile_panel_size",
-                    self.painter.value(profile.panel_size().to_string()),
-                ),
-                (
-                    "profile_led_type",
-                    routing_profile
-                        .and_then(|value| value.led_type)
-                        .map_or_else(
-                            || self.painter.warning("<unknown>"),
-                            |value| self.painter.value(value.to_string()),
-                        ),
-                ),
-                (
-                    "profile_text_path",
-                    routing_profile
-                        .and_then(|value| value.text_path)
-                        .map_or_else(
-                            || self.painter.warning("<unknown>"),
-                            |value| self.painter.value(value.to_string()),
-                        ),
-                ),
-                (
-                    "profile_joint_mode",
-                    routing_profile
-                        .and_then(|value| value.joint_mode)
-                        .map_or_else(
-                            || self.painter.warning("<none>"),
-                            |value| self.painter.value(value.to_string()),
-                        ),
-                ),
-                (
-                    "profile_image_upload_mode",
-                    self.painter.value(profile.image_upload_mode().to_string()),
-                ),
-                (
-                    "profile_gif_header",
-                    self.painter.value(profile.gif_header_profile().to_string()),
-                ),
-                (
-                    "profile_write_chunk_fallback",
-                    self.painter.value(format!(
-                        "{} bytes",
-                        profile.write_without_response_fallback()
-                    )),
-                ),
-            ],
-        )
-    }
-
-    fn endpoint_properties(&self, endpoint: protocol::EndpointId) -> Option<String> {
-        let expected_uuid = self
-            .report
-            .session_metadata()
-            .resolved_endpoint_uuid(endpoint)
-            .unwrap_or_else(|| protocol::endpoint_metadata(endpoint).uuid());
-        self.report
-            .services()
-            .iter()
-            .flat_map(|service| service.characteristics().iter())
-            .find(|characteristic| characteristic.uuid().eq_ignore_ascii_case(expected_uuid))
-            .map(|characteristic| characteristic.properties().join(","))
+        self.section_table(&section)
     }
 
     fn services_table(&self) -> Table {
@@ -221,132 +223,41 @@ impl<'a> InspectReportView<'a> {
         )
     }
 
-    fn model_resolution_debug_table(&self) -> Option<Table> {
-        let debug = self.report.session_metadata().model_resolution_debug()?;
-        let scan_identity = debug.scan_identity();
-        let write_modes = debug.led_info_write_modes_attempted();
-        let scan_properties_debug = debug.scan_properties_debug();
+    fn diagnostic_value(&self, value: &str) -> String {
+        if value == "yes" {
+            return self.painter.success(value);
+        }
+        if value == "no" {
+            return self.painter.warning(value);
+        }
+        if value.starts_with('<') && value.ends_with('>') {
+            return self.painter.warning(value);
+        }
 
-        Some(Table::key_value(
-            self.painter,
-            vec![
-                (
-                    "Scan identity present",
-                    if scan_identity.is_some() {
-                        self.painter.success("yes")
-                    } else {
-                        self.painter.warning("no")
-                    },
-                ),
-                (
-                    "Scan identity shape",
-                    scan_identity.map_or_else(
-                        || self.painter.warning("<none>"),
-                        |identity| self.painter.value(identity.shape.to_string()),
-                    ),
-                ),
-                (
-                    "Scan identity CID",
-                    scan_identity.map_or_else(
-                        || self.painter.warning("<none>"),
-                        |identity| self.painter.value(identity.cid.to_string()),
-                    ),
-                ),
-                (
-                    "Scan identity PID",
-                    scan_identity.map_or_else(
-                        || self.painter.warning("<none>"),
-                        |identity| self.painter.value(identity.pid.to_string()),
-                    ),
-                ),
-                (
-                    "CoreBluetooth manufacturer data",
-                    scan_properties_debug.map_or_else(
-                        || self.painter.warning("<none>"),
-                        |scan_debug| {
-                            if scan_debug.manufacturer_data().is_empty() {
-                                return self.painter.warning("<none>");
-                            }
+        self.painter.value(value)
+    }
 
-                            let rendered = scan_debug
-                                .manufacturer_data()
-                                .iter()
-                                .map(|record| {
-                                    format!(
-                                        "0x{:04X}={}",
-                                        record.company_id(),
-                                        format_hex(record.payload())
-                                    )
-                                })
-                                .collect::<Vec<_>>()
-                                .join(";");
-                            self.painter.value(rendered)
-                        },
-                    ),
-                ),
-                (
-                    "CoreBluetooth service data",
-                    scan_properties_debug.map_or_else(
-                        || self.painter.warning("<none>"),
-                        |scan_debug| {
-                            if scan_debug.service_data().is_empty() {
-                                return self.painter.warning("<none>");
-                            }
+    fn rows_table(&self, rows: &[DiagnosticRow]) -> Table {
+        let rows = rows
+            .iter()
+            .map(|row| (row.label(), self.diagnostic_value(row.value())))
+            .collect();
+        Table::key_value(self.painter, rows)
+    }
 
-                            let rendered = scan_debug
-                                .service_data()
-                                .iter()
-                                .map(|record| {
-                                    format!("{}={}", record.uuid(), format_hex(record.payload()))
-                                })
-                                .collect::<Vec<_>>()
-                                .join(";");
-                            self.painter.value(rendered)
-                        },
-                    ),
-                ),
-                (
-                    "CoreBluetooth services",
-                    scan_properties_debug.map_or_else(
-                        || self.painter.warning("<none>"),
-                        |scan_debug| {
-                            if scan_debug.service_uuids().is_empty() {
-                                return self.painter.warning("<none>");
-                            }
-                            self.painter.value(scan_debug.service_uuids().join(","))
-                        },
-                    ),
-                ),
-                (
-                    "LED-info query outcome",
-                    self.painter
-                        .value(debug.led_info_query_outcome().to_string()),
-                ),
-                (
-                    "LED-info write modes attempted",
-                    if write_modes.is_empty() {
-                        self.painter.warning("<none>")
-                    } else {
-                        self.painter.value(write_modes.join(","))
-                    },
-                ),
-                (
-                    "LED-info sync-time fallback attempted",
-                    if debug.led_info_sync_time_fallback_attempted() {
-                        self.painter.success("yes")
-                    } else {
-                        self.painter.warning("no")
-                    },
-                ),
-                (
-                    "LED-info last payload",
-                    debug.led_info_last_payload().map_or_else(
-                        || self.painter.warning("<none>"),
-                        |payload| self.painter.value(format_hex(payload)),
-                    ),
-                ),
-            ],
-        ))
+    fn section_table(&self, section: &dyn crate::hw::diagnostics::DiagnosticsSection) -> Table {
+        let section_rows = section.rows();
+        self.rows_table(&section_rows)
+    }
+
+    fn connection_diagnostics_tables(&self) -> Vec<(String, Table)> {
+        self.report
+            .session_metadata()
+            .connection_diagnostics()
+            .sections()
+            .iter()
+            .map(|section| (section.name().to_string(), self.rows_table(section.rows())))
+            .collect()
     }
 }
 
@@ -359,10 +270,20 @@ impl Display for InspectReportView<'_> {
         writeln!(f)?;
         write!(f, "\n{}", self.painter.heading("Session metadata:"))?;
         write!(f, "\n{}", self.session_table())?;
-        if let Some(table) = self.model_resolution_debug_table() {
+        if !self
+            .report
+            .session_metadata()
+            .connection_diagnostics()
+            .is_empty()
+        {
+            let diagnostics_tables = self.connection_diagnostics_tables();
             writeln!(f)?;
-            write!(f, "\n{}", self.painter.heading("Model resolution debug:"))?;
-            write!(f, "\n{table}")?;
+            write!(f, "\n{}", self.painter.heading("Connection diagnostics:"))?;
+            for (section_name, table) in diagnostics_tables {
+                writeln!(f)?;
+                write!(f, "\n{}", self.painter.value(format!("{section_name}:")))?;
+                write!(f, "\n{table}")?;
+            }
         }
         writeln!(f)?;
         write!(

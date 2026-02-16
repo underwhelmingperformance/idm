@@ -1,16 +1,15 @@
 ---
 source: tests/commands_cli.rs
-assertion_line: 51
 expression: stdout.trim_end()
 ---
 Connected device:
 ╭───────────┬───────────╮
 │ field     │ value     │
 ├───────────┼───────────┤
-│ adapter   │ hci0      │
-│ device_id │ AA:BB:CC  │
-│ name      │ IDM-Clock │
-│ rssi      │ -43       │
+│ Adapter   │ hci0      │
+│ Device ID │ AA:BB:CC  │
+│ Name      │ IDM-Clock │
+│ RSSI      │ -43       │
 ╰───────────┴───────────╯
 
 Listen session:
