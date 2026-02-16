@@ -21,6 +21,7 @@ owo-colors = "4.2.3"
 strum = "0.27.2"
 strum_macros = "0.27.2"
 tabled = { version = "0.20.0", features = ["ansi"] }
+terminal_size = "0.4.3"
 thiserror = "2.0.18"
 time = "0.3.47"
 tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread", "signal", "time"] }

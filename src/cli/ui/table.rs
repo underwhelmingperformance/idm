@@ -1,6 +1,10 @@
 use std::fmt::{self, Display, Formatter};
+use std::io::IsTerminal;
 
-use tabled::{builder::Builder, settings::Style as TableStyle};
+use tabled::{
+    builder::Builder,
+    settings::{Style as TableStyle, Width as TableWidth, peaker::Priority},
+};
 
 use super::painter::Painter;
 
@@ -42,8 +46,21 @@ impl Display for Table {
         }
         let mut table = builder.build();
         table.with(TableStyle::rounded());
+        if let Some(width) = terminal_width() {
+            table.with(TableWidth::wrap(width).priority(Priority::right()));
+        }
         write!(f, "{table}")
     }
+}
+
+fn terminal_width() -> Option<usize> {
+    if !std::io::stdout().is_terminal() {
+        return None;
+    }
+
+    terminal_size::terminal_size()
+        .map(|(width, _)| usize::from(width.0))
+        .filter(|width| *width > 0)
 }
 
 #[cfg(test)]
