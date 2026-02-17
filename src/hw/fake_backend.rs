@@ -4,6 +4,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use bon::Builder;
 use tokio::time::sleep;
+use tracing::instrument;
 
 use super::DeviceProfile;
 use super::hardware::{ConnectedBleSession, WriteMode, missing_required_endpoints};
@@ -117,6 +118,7 @@ impl FakeBackend {
     }
 
     /// Connects to the first matching fake peripheral and returns a session.
+    #[instrument(skip(self), level = "debug", fields(prefix = name_prefix))]
     pub(crate) async fn connect_first_matching_device(
         self,
         name_prefix: &str,
@@ -212,12 +214,14 @@ impl ConnectedBleSession for FakeDeviceSession {
         self.session_metadata.device_routing_profile()
     }
 
+    #[instrument(skip(self), level = "trace", fields(?endpoint))]
     async fn read_endpoint(&self, endpoint: EndpointId) -> Result<Vec<u8>, InteractionError> {
         self.read_endpoint_optional(endpoint)
             .await?
             .ok_or(InteractionError::MissingEndpoint { endpoint })
     }
 
+    #[instrument(skip(self), level = "trace", fields(?endpoint))]
     async fn read_endpoint_optional(
         &self,
         endpoint: EndpointId,
@@ -229,12 +233,14 @@ impl ConnectedBleSession for FakeDeviceSession {
         Ok(self.initial_read.clone())
     }
 
+    #[instrument(skip(self, payload), level = "trace", fields(?endpoint, ?mode, payload_len = payload.len()))]
     async fn write_endpoint(
         &self,
         endpoint: EndpointId,
-        _payload: &[u8],
-        _mode: WriteMode,
+        payload: &[u8],
+        mode: WriteMode,
     ) -> Result<(), InteractionError> {
+        let _ = (payload, mode);
         if endpoint != EndpointId::WriteCharacteristic {
             return Err(InteractionError::MissingEndpoint { endpoint });
         }
@@ -242,6 +248,7 @@ impl ConnectedBleSession for FakeDeviceSession {
         Ok(())
     }
 
+    #[instrument(skip(self), level = "trace", fields(?endpoint))]
     async fn subscribe_endpoint(&self, endpoint: EndpointId) -> Result<(), InteractionError> {
         if endpoint != EndpointId::ReadNotifyCharacteristic {
             return Err(InteractionError::MissingEndpoint { endpoint });
@@ -250,6 +257,7 @@ impl ConnectedBleSession for FakeDeviceSession {
         Ok(())
     }
 
+    #[instrument(skip(self), level = "trace", fields(?endpoint))]
     async fn unsubscribe_endpoint(&self, endpoint: EndpointId) -> Result<(), InteractionError> {
         if endpoint != EndpointId::ReadNotifyCharacteristic {
             return Err(InteractionError::MissingEndpoint { endpoint });
@@ -258,6 +266,11 @@ impl ConnectedBleSession for FakeDeviceSession {
         Ok(())
     }
 
+    #[instrument(
+        skip(self, on_notification),
+        level = "trace",
+        fields(?endpoint, ?max_notifications)
+    )]
     async fn run_notifications(
         &self,
         endpoint: EndpointId,
@@ -294,6 +307,7 @@ impl ConnectedBleSession for FakeDeviceSession {
         Ok(NotificationRunSummary::new(received, stop_reason))
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn close(self: Box<Self>) -> Result<(), InteractionError> {
         let _ = self;
         Ok(())
@@ -359,6 +373,7 @@ fn parse_scan_fixture(raw_fixture: &str) -> Result<Vec<FoundDevice>, FixtureErro
         .collect::<Result<Vec<_>, _>>()
 }
 
+#[instrument(skip(devices), level = "trace", fields(prefix = name_prefix))]
 async fn first_matching_device(
     devices: Vec<FoundDevice>,
     discovery_delay: Duration,

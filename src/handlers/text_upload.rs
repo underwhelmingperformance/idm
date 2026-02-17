@@ -4,6 +4,7 @@ use crc32fast::hash;
 use font8x8::UnicodeFonts;
 use thiserror::Error;
 use tokio::time::timeout;
+use tracing::instrument;
 
 use crate::error::ProtocolError;
 use crate::hw::{DeviceSession, WriteMode};
@@ -244,10 +245,16 @@ impl TextUploadHandler {
     /// # Errors
     ///
     /// Returns an error when payload construction, BLE writes, or pacing fails.
+    #[instrument(skip_all, level = "debug")]
     pub async fn upload(
         session: &DeviceSession,
         request: TextUploadRequest,
     ) -> Result<UploadReceipt, ProtocolError> {
+        tracing::trace!(
+            text_char_count = request.text.chars().count(),
+            ?request.pacing,
+            "starting text upload"
+        );
         ensure_text_path_is_resolved(session)?;
         let frame = build_upload_frame(&request)?;
         let chunk_size = write_chunk_size(session)?;
@@ -284,7 +291,7 @@ impl TextUploadHandler {
                     if upload_result.is_ok() {
                         return Err(error.into());
                     }
-                    tracing::debug!(
+                    tracing::trace!(
                         ?error,
                         "failed to unsubscribe text-upload notifications cleanly"
                     );
@@ -319,7 +326,9 @@ fn ensure_text_path_is_resolved(session: &DeviceSession) -> Result<(), ProtocolE
     Ok(())
 }
 
+#[instrument(skip(session), level = "trace", fields(?pacing))]
 async fn apply_pacing(session: &DeviceSession, pacing: UploadPacing) -> Result<(), ProtocolError> {
+    tracing::trace!(?pacing, "applying upload pacing");
     match pacing {
         UploadPacing::None => Ok(()),
         UploadPacing::Delay { per_chunk } => {
@@ -337,10 +346,15 @@ async fn apply_pacing(session: &DeviceSession, pacing: UploadPacing) -> Result<(
     }
 }
 
+#[instrument(skip(session), level = "trace", fields(timeout_ms = timeout_duration.as_millis()))]
 async fn wait_for_notify_ack(
     session: &DeviceSession,
     timeout_duration: Duration,
 ) -> Result<(), ProtocolError> {
+    tracing::trace!(
+        timeout_ms = timeout_duration.as_millis(),
+        "waiting for text-upload acknowledgement"
+    );
     let mut decoded_event: Option<Result<NotifyEvent, NotificationDecodeError>> = None;
     let wait_result = timeout(
         timeout_duration,

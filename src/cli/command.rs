@@ -2,7 +2,8 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use bon::Builder;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+use tracing_subscriber::filter::LevelFilter;
 
 use crate::cli::control::ControlArgs;
 use crate::cli::listen::ListenArgs;
@@ -36,6 +37,9 @@ pub struct Args {
     /// Path to the persisted model-overrides file.
     #[arg(long, global = true)]
     model_overrides_path: Option<PathBuf>,
+    /// Override the telemetry log verbosity.
+    #[arg(long, global = true, value_enum)]
+    log_level: Option<LogLevel>,
     #[command(subcommand)]
     command: Command,
 }
@@ -60,6 +64,7 @@ impl Args {
             fake_discovery_delay: None,
             model_led_type: None,
             model_overrides_path: None,
+            log_level: None,
             command,
         }
     }
@@ -92,6 +97,12 @@ impl Args {
         ModelResolutionConfig::new(self.model_led_type, self.model_overrides_path.clone())
     }
 
+    /// Returns an optional CLI override for telemetry log level.
+    #[must_use]
+    pub fn log_level(&self) -> Option<LogLevel> {
+        self.log_level
+    }
+
     /// Splits parsed CLI arguments into command and optional fake-client settings.
     ///
     /// # Errors
@@ -106,6 +117,7 @@ impl Args {
             fake_discovery_delay,
             model_led_type,
             model_overrides_path,
+            log_level: _,
             command,
         } = self;
 
@@ -126,6 +138,34 @@ impl Args {
         };
 
         Ok((command, fake_args))
+    }
+}
+
+/// Log verbosity override for tracing and log events.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
+pub enum LogLevel {
+    /// Error-level events only.
+    Error,
+    /// Warning and error events.
+    Warn,
+    /// Informational, warning, and error events.
+    Info,
+    /// Debug and above.
+    Debug,
+    /// Full trace verbosity.
+    Trace,
+}
+
+impl LogLevel {
+    #[must_use]
+    pub(crate) fn as_level_filter(self) -> LevelFilter {
+        match self {
+            Self::Error => LevelFilter::ERROR,
+            Self::Warn => LevelFilter::WARN,
+            Self::Info => LevelFilter::INFO,
+            Self::Debug => LevelFilter::DEBUG,
+            Self::Trace => LevelFilter::TRACE,
+        }
     }
 }
 
@@ -283,5 +323,21 @@ mod tests {
             Some(std::path::Path::new("/tmp/idm-overrides.tsv")),
             model_resolution.overrides_path()
         );
+    }
+
+    #[test]
+    fn log_level_argument_parses() {
+        let cli = Args::try_parse_from([
+            "idm",
+            "--log-level",
+            "trace",
+            "--fake",
+            "--fake-scan",
+            "hci0|AA:BB:CC|IDM-Clock|-43",
+            "inspect",
+        ])
+        .expect("log-level should parse as a value enum");
+
+        assert_eq!(Some(LogLevel::Trace), cli.log_level());
     }
 }

@@ -35,9 +35,12 @@ pub fn expand(input: TokenStream) -> TokenStream {
             }
         },
         _ => {
-            return syn::Error::new_spanned(&input, "HasDiagnostics can only be derived for structs")
-                .to_compile_error()
-                .into();
+            return syn::Error::new_spanned(
+                &input,
+                "HasDiagnostics can only be derived for structs",
+            )
+            .to_compile_error()
+            .into();
         }
     };
 

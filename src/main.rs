@@ -1,7 +1,9 @@
 use clap::Parser;
 use std::process::ExitCode;
 
-use idm::{Args, fake_hardware_client, real_hardware_client_with_model_resolution, run};
+use idm::{
+    Args, fake_hardware_client, real_hardware_client_with_model_resolution, run_with_log_level,
+};
 
 #[tokio::main]
 async fn main() -> ExitCode {
@@ -10,6 +12,7 @@ async fn main() -> ExitCode {
     let mut stdout = stdout.lock();
 
     let run_result = async {
+        let log_level = args.log_level();
         let model_resolution = args.model_resolution();
         let (command, maybe_fake_args) = args.into_command_and_fake_args()?;
         let hardware_client = match maybe_fake_args {
@@ -17,7 +20,7 @@ async fn main() -> ExitCode {
             None => real_hardware_client_with_model_resolution(model_resolution),
         };
 
-        run(command, &mut stdout, hardware_client).await
+        run_with_log_level(command, &mut stdout, hardware_client, log_level).await
     }
     .await;
 

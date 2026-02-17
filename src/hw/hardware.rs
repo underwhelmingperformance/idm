@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use tracing::info;
+use tracing::{info, instrument, trace};
 
 use super::DeviceRoutingProfile;
 use super::btleplug_backend::BtleplugBackend;
@@ -115,6 +115,7 @@ impl<T: BleTransport> SessionHandler<T> {
     }
 
     /// Connects to the first matching device and returns a session.
+    #[instrument(skip(self), level = "debug", fields(prefix = name_prefix))]
     pub(crate) async fn connect_first(
         self,
         name_prefix: &str,
@@ -181,6 +182,7 @@ impl RealHardwareClient {
 
 #[async_trait]
 impl HardwareClient for RealHardwareClient {
+    #[instrument(skip(self), level = "info", fields(prefix = name_prefix))]
     async fn connect_first_device(
         self: Box<Self>,
         name_prefix: &str,
@@ -205,6 +207,7 @@ impl FakeHardwareClient {
 
 #[async_trait]
 impl HardwareClient for FakeHardwareClient {
+    #[instrument(skip(self), level = "info", fields(prefix = name_prefix))]
     async fn connect_first_device(
         self: Box<Self>,
         name_prefix: &str,
@@ -265,6 +268,7 @@ impl DeviceSession {
     /// # Errors
     ///
     /// Returns an error if the endpoint is unavailable or the read fails.
+    #[instrument(skip(self), level = "trace", fields(?endpoint))]
     pub async fn read_endpoint(&self, endpoint: EndpointId) -> Result<Vec<u8>, InteractionError> {
         self.session.read_endpoint(endpoint).await
     }
@@ -274,6 +278,7 @@ impl DeviceSession {
     /// # Errors
     ///
     /// Returns an error if the endpoint is unavailable or the read fails.
+    #[instrument(skip(self), level = "trace", fields(?endpoint))]
     pub async fn read_endpoint_optional(
         &self,
         endpoint: EndpointId,
@@ -286,6 +291,7 @@ impl DeviceSession {
     /// # Errors
     ///
     /// Returns an error if the endpoint is unavailable or the write fails.
+    #[instrument(skip(self, payload), level = "trace", fields(?endpoint, ?mode, payload_len = payload.len()))]
     pub async fn write_endpoint(
         &self,
         endpoint: EndpointId,
@@ -300,6 +306,7 @@ impl DeviceSession {
     /// # Errors
     ///
     /// Returns an error if subscription fails.
+    #[instrument(skip(self), level = "trace", fields(?endpoint))]
     pub async fn subscribe_endpoint(&self, endpoint: EndpointId) -> Result<(), InteractionError> {
         self.session.subscribe_endpoint(endpoint).await
     }
@@ -309,6 +316,7 @@ impl DeviceSession {
     /// # Errors
     ///
     /// Returns an error if unsubscription fails.
+    #[instrument(skip(self), level = "trace", fields(?endpoint))]
     pub async fn unsubscribe_endpoint(&self, endpoint: EndpointId) -> Result<(), InteractionError> {
         self.session.unsubscribe_endpoint(endpoint).await
     }
@@ -318,6 +326,11 @@ impl DeviceSession {
     /// # Errors
     ///
     /// Returns an error if notification handling fails.
+    #[instrument(
+        skip(self, on_notification),
+        level = "trace",
+        fields(?endpoint, ?max_notifications)
+    )]
     pub async fn run_notifications<F>(
         &self,
         endpoint: EndpointId,
@@ -338,6 +351,11 @@ impl DeviceSession {
     /// # Errors
     ///
     /// Returns an error if reads, subscriptions, notification handling, or teardown fails.
+    #[instrument(
+        skip(self, on_notification),
+        level = "debug",
+        fields(?max_notifications)
+    )]
     pub async fn run_listen<F>(
         self,
         max_notifications: Option<usize>,
@@ -360,7 +378,7 @@ impl DeviceSession {
             .await;
 
         if let Err(error) = self.unsubscribe_endpoint(endpoint).await {
-            tracing::debug!(?error, "failed to unsubscribe cleanly");
+            trace!(?error, "failed to unsubscribe cleanly");
         }
 
         self.close().await?;
@@ -379,6 +397,7 @@ impl DeviceSession {
     /// # Errors
     ///
     /// Returns an error if teardown fails.
+    #[instrument(skip(self), level = "debug")]
     pub async fn close(self) -> Result<(), InteractionError> {
         self.session.close().await
     }

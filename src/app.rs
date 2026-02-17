@@ -5,7 +5,7 @@ use owo_colors::OwoColorize;
 use tracing::instrument;
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
-use crate::cli::{Command, FakeArgs};
+use crate::cli::{Command, FakeArgs, LogLevel};
 use crate::hw::{
     DeviceSession, HardwareClient, ModelResolutionConfig,
     fake_hardware_client as build_fake_hardware_client,
@@ -143,7 +143,57 @@ pub async fn run<W>(
 where
     W: io::Write,
 {
-    run_with_clients(command, out, &SystemTerminalClient, hardware_client).await
+    run_with_log_level(command, out, hardware_client, None).await
+}
+
+/// Runs the CLI command with an explicit telemetry log-level override.
+///
+/// ```
+/// # async fn run() -> anyhow::Result<()> {
+/// use clap::Parser;
+///
+/// let args = idm::Args::try_parse_from([
+///     "idm",
+///     "--log-level",
+///     "debug",
+///     "--fake",
+///     "--fake-scan",
+///     "hci0|AA:BB:CC|IDM-Clock|-43",
+///     "inspect",
+/// ])?;
+/// let log_level = args.log_level();
+/// let (command, maybe_fake_args) = args.into_command_and_fake_args()?;
+/// let hardware_client = match maybe_fake_args {
+///     Some(fake_args) => idm::fake_hardware_client(fake_args),
+///     None => idm::real_hardware_client(),
+/// };
+/// let mut out = Vec::new();
+/// idm::run_with_log_level(command, &mut out, hardware_client, log_level).await?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Errors
+///
+/// Returns an error if tracing initialisation fails, BLE interaction fails, or
+/// output writing fails.
+pub async fn run_with_log_level<W>(
+    command: Command,
+    out: &mut W,
+    hardware_client: Box<dyn HardwareClient>,
+    log_level: Option<LogLevel>,
+) -> Result<()>
+where
+    W: io::Write,
+{
+    run_with_clients_and_log_level(
+        command,
+        out,
+        &SystemTerminalClient,
+        hardware_client,
+        log_level,
+    )
+    .await
 }
 
 /// Runs the CLI command with injected clients.
@@ -161,7 +211,72 @@ pub async fn run_with_clients<W>(
 where
     W: io::Write,
 {
-    telemetry::initialise_tracing("idm", terminal_client.stderr_is_terminal())?;
+    run_with_clients_and_log_level(command, out, terminal_client, hardware_client, None).await
+}
+
+/// Runs the CLI command with injected clients and explicit telemetry settings.
+///
+/// ```
+/// # async fn run() -> anyhow::Result<()> {
+/// use clap::Parser;
+///
+/// struct FakeTerminal;
+/// impl idm::TerminalClient for FakeTerminal {
+///     fn stdout_is_terminal(&self) -> bool { false }
+///     fn stderr_is_terminal(&self) -> bool { false }
+/// }
+///
+/// let args = idm::Args::try_parse_from([
+///     "idm",
+///     "--log-level",
+///     "trace",
+///     "--fake",
+///     "--fake-scan",
+///     "hci0|AA:BB:CC|IDM-Clock|-43",
+///     "inspect",
+/// ])?;
+/// let log_level = args.log_level();
+/// let (command, maybe_fake_args) = args.into_command_and_fake_args()?;
+/// let hardware_client = match maybe_fake_args {
+///     Some(fake_args) => idm::fake_hardware_client(fake_args),
+///     None => idm::real_hardware_client(),
+/// };
+/// let mut out = Vec::new();
+/// idm::run_with_clients_and_log_level(
+///     command,
+///     &mut out,
+///     &FakeTerminal,
+///     hardware_client,
+///     log_level,
+/// ).await?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Errors
+///
+/// Returns an error if tracing initialisation fails, BLE interaction fails, or
+/// output writing fails.
+#[instrument(
+    skip(out, terminal_client, hardware_client),
+    level = "info",
+    fields(command = %command_name(&command), ?log_level)
+)]
+pub async fn run_with_clients_and_log_level<W>(
+    command: Command,
+    out: &mut W,
+    terminal_client: &dyn TerminalClient,
+    hardware_client: Box<dyn HardwareClient>,
+    log_level: Option<LogLevel>,
+) -> Result<()>
+where
+    W: io::Write,
+{
+    telemetry::initialise_tracing(
+        "idm",
+        terminal_client.stderr_is_terminal(),
+        log_level.map(LogLevel::as_level_filter),
+    )?;
 
     match command {
         Command::Inspect => crate::cli::inspect::run(hardware_client, out, terminal_client).await,
@@ -169,5 +284,13 @@ where
             crate::cli::listen::run(hardware_client, &args, out, terminal_client).await
         }
         Command::Control(args) => crate::cli::control::run(hardware_client, &args, out).await,
+    }
+}
+
+fn command_name(command: &Command) -> &'static str {
+    match command {
+        Command::Inspect => "inspect",
+        Command::Listen(_args) => "listen",
+        Command::Control(_args) => "control",
     }
 }

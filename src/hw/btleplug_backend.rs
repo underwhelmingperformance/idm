@@ -10,7 +10,7 @@ use btleplug::platform::{Adapter, Manager, Peripheral};
 use time::OffsetDateTime;
 use tokio::time::{sleep, timeout};
 use tokio_stream::StreamExt;
-use tracing::{debug, info, instrument};
+use tracing::{debug, info, instrument, trace};
 
 use super::DeviceProfile;
 use super::hardware::{ConnectedBleSession, WriteMode, missing_required_endpoints};
@@ -187,6 +187,7 @@ impl BtleplugBackend {
         }
     }
 
+    #[instrument(skip(self), level = "trace")]
     async fn adapters(&self) -> Result<Vec<AdapterHandle>, InteractionError> {
         let adapters = self.manager.adapters().await?;
         if adapters.is_empty() {
@@ -376,6 +377,7 @@ async fn maybe_apply_joint_mode(
     Ok(())
 }
 
+#[instrument(skip(peripheral, characteristics_by_endpoint), level = "debug")]
 async fn query_led_info(
     peripheral: &Peripheral,
     characteristics_by_endpoint: &HashMap<EndpointId, Characteristic>,
@@ -395,13 +397,13 @@ async fn query_led_info(
         .properties
         .intersects(CharPropFlags::NOTIFY | CharPropFlags::INDICATE);
     if !supports_read && !supports_notify {
-        debug!("skipping LED-info query because endpoint is neither readable nor notifiable");
+        trace!("skipping LED-info query because endpoint is neither readable nor notifiable");
         return LedInfoQueryResult::skipped(LedInfoQueryOutcome::SkippedNoNotifyOrRead);
     }
 
     let write_types = write_types_for_characteristic(write_characteristic.properties);
     if write_types.is_empty() {
-        debug!("skipping LED-info query because write endpoint is not writable");
+        trace!("skipping LED-info query because write endpoint is not writable");
         return LedInfoQueryResult::skipped(LedInfoQueryOutcome::SkippedNoWriteCharacteristic);
     }
 
@@ -522,6 +524,11 @@ async fn query_led_info(
     }
 }
 
+#[instrument(
+    skip(peripheral, write_characteristic, read_characteristic, query),
+    level = "trace",
+    fields(?write_type, query_len = query.len())
+)]
 async fn query_led_info_via_notify(
     peripheral: &Peripheral,
     write_characteristic: &Characteristic,
@@ -532,7 +539,7 @@ async fn query_led_info_via_notify(
     let mut notifications = match peripheral.notifications().await {
         Ok(stream) => stream,
         Err(error) => {
-            debug!(
+            trace!(
                 ?error,
                 "failed to open notification stream for LED-info query"
             );
@@ -541,7 +548,7 @@ async fn query_led_info_via_notify(
     };
 
     if let Err(error) = peripheral.subscribe(read_characteristic).await {
-        debug!(
+        trace!(
             ?error,
             "failed to subscribe for LED-info query notifications"
         );
@@ -553,7 +560,7 @@ async fn query_led_info_via_notify(
         .await
     {
         let _ = peripheral.unsubscribe(read_characteristic).await;
-        debug!(?error, "failed to write LED-info query");
+        trace!(?error, "failed to write LED-info query");
         return LedInfoProbeResult::NoResponse;
     }
 
@@ -563,7 +570,7 @@ async fn query_led_info_via_notify(
         let now = tokio::time::Instant::now();
         if now >= deadline {
             let _ = peripheral.unsubscribe(read_characteristic).await;
-            debug!("timed out waiting for LED-info notify response");
+            trace!("timed out waiting for LED-info notify response");
             return first_invalid_payload.map_or(
                 LedInfoProbeResult::NoResponse,
                 LedInfoProbeResult::InvalidPayload,
@@ -575,7 +582,7 @@ async fn query_led_info_via_notify(
             Ok(Some(value)) => value,
             Ok(None) => {
                 let _ = peripheral.unsubscribe(read_characteristic).await;
-                debug!("notification stream closed while waiting for LED-info response");
+                trace!("notification stream closed while waiting for LED-info response");
                 return first_invalid_payload.map_or(
                     LedInfoProbeResult::NoResponse,
                     LedInfoProbeResult::InvalidPayload,
@@ -583,7 +590,7 @@ async fn query_led_info_via_notify(
             }
             Err(_elapsed) => {
                 let _ = peripheral.unsubscribe(read_characteristic).await;
-                debug!("timed out waiting for LED-info notify payload");
+                trace!("timed out waiting for LED-info notify payload");
                 return first_invalid_payload.map_or(
                     LedInfoProbeResult::NoResponse,
                     LedInfoProbeResult::InvalidPayload,
@@ -610,6 +617,11 @@ async fn query_led_info_via_notify(
     }
 }
 
+#[instrument(
+    skip(peripheral, write_characteristic, read_characteristic, query),
+    level = "trace",
+    fields(?write_type, query_len = query.len())
+)]
 async fn query_led_info_via_read(
     peripheral: &Peripheral,
     write_characteristic: &Characteristic,
@@ -621,7 +633,7 @@ async fn query_led_info_via_read(
         .write(write_characteristic, query, write_type)
         .await
     {
-        debug!(?error, "failed to write LED-info query");
+        trace!(?error, "failed to write LED-info query");
         return LedInfoProbeResult::NoResponse;
     }
 
@@ -642,11 +654,11 @@ async fn query_led_info_via_read(
             }
         }
         Ok(Err(error)) => {
-            debug!(?error, "failed to read LED-info response");
+            trace!(?error, "failed to read LED-info response");
             LedInfoProbeResult::NoResponse
         }
         Err(_elapsed) => {
-            debug!("timed out waiting for LED-info read response");
+            trace!("timed out waiting for LED-info read response");
             LedInfoProbeResult::NoResponse
         }
     }
@@ -790,12 +802,14 @@ impl ConnectedBleSession for RealDeviceSession {
         self.session_metadata.device_routing_profile()
     }
 
+    #[instrument(skip(self), level = "trace", fields(?endpoint))]
     async fn read_endpoint(&self, endpoint: EndpointId) -> Result<Vec<u8>, InteractionError> {
         let characteristic = self.characteristic_for(endpoint)?;
         let payload = self.peripheral.read(characteristic).await?;
         Ok(payload)
     }
 
+    #[instrument(skip(self), level = "trace", fields(?endpoint))]
     async fn read_endpoint_optional(
         &self,
         endpoint: EndpointId,
@@ -803,6 +817,7 @@ impl ConnectedBleSession for RealDeviceSession {
         Ok(Some(self.read_endpoint(endpoint).await?))
     }
 
+    #[instrument(skip(self, payload), level = "trace", fields(?endpoint, ?mode, payload_len = payload.len()))]
     async fn write_endpoint(
         &self,
         endpoint: EndpointId,
@@ -820,18 +835,25 @@ impl ConnectedBleSession for RealDeviceSession {
         Ok(())
     }
 
+    #[instrument(skip(self), level = "trace", fields(?endpoint))]
     async fn subscribe_endpoint(&self, endpoint: EndpointId) -> Result<(), InteractionError> {
         let characteristic = self.characteristic_for(endpoint)?;
         self.peripheral.subscribe(characteristic).await?;
         Ok(())
     }
 
+    #[instrument(skip(self), level = "trace", fields(?endpoint))]
     async fn unsubscribe_endpoint(&self, endpoint: EndpointId) -> Result<(), InteractionError> {
         let characteristic = self.characteristic_for(endpoint)?;
         self.peripheral.unsubscribe(characteristic).await?;
         Ok(())
     }
 
+    #[instrument(
+        skip(self, on_notification),
+        level = "debug",
+        fields(?endpoint, ?max_notifications)
+    )]
     async fn run_notifications(
         &self,
         endpoint: EndpointId,
@@ -874,6 +896,7 @@ impl ConnectedBleSession for RealDeviceSession {
         Ok(NotificationRunSummary::new(received, stop_reason))
     }
 
+    #[instrument(skip(self), level = "debug")]
     async fn close(self: Box<Self>) -> Result<(), InteractionError> {
         if self.peripheral.is_connected().await? {
             self.peripheral.disconnect().await?;

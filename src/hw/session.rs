@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use tracing::instrument;
 
 use super::hardware::missing_required_endpoints;
 use super::model::{CharacteristicInfo, EndpointPresence, ServiceInfo};
@@ -48,6 +49,13 @@ impl NegotiatedSessionEndpoints {
 }
 
 pub(crate) fn negotiate_session_endpoints(
+    services: &[ServiceInfo],
+) -> Result<NegotiatedSessionEndpoints, InteractionError> {
+    negotiate_session_endpoints_inner(services)
+}
+
+#[instrument(skip(services), level = "debug", fields(service_count = services.len()))]
+fn negotiate_session_endpoints_inner(
     services: &[ServiceInfo],
 ) -> Result<NegotiatedSessionEndpoints, InteractionError> {
     const PROFILES: [ProfileCandidate; 2] = [

@@ -1,4 +1,5 @@
 use thiserror::Error;
+use tracing::instrument;
 
 use crate::error::ProtocolError;
 use crate::hw::{DeviceSession, WriteMode};
@@ -85,6 +86,7 @@ impl BrightnessHandler {
     /// # Errors
     ///
     /// Returns an error when frame encoding fails or the BLE write fails.
+    #[instrument(skip(session), level = "debug", fields(brightness = brightness.value()))]
     pub async fn set_brightness(
         session: &DeviceSession,
         brightness: Brightness,

@@ -1,6 +1,7 @@
 use crate::error::ProtocolError;
 use crate::hw::{DeviceSession, WriteMode};
 use crate::protocol::EndpointId;
+use tracing::instrument;
 
 use super::{FrameCodec, FrameCodecError};
 
@@ -44,6 +45,7 @@ impl PowerHandler {
     /// # Errors
     ///
     /// Returns an error when frame encoding fails or the BLE write fails.
+    #[instrument(skip(session), level = "debug", fields(?power))]
     pub async fn set_power(
         session: &DeviceSession,
         power: ScreenPower,

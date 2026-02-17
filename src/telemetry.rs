@@ -10,6 +10,7 @@ use tracing_opentelemetry::OpenTelemetryLayer;
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::Layer;
 use tracing_subscriber::filter;
+use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::fmt;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -22,9 +23,12 @@ static TRACING_INITIALISED: OnceLock<Result<(), TelemetryError>> = OnceLock::new
 pub(crate) fn initialise_tracing(
     service_name: &str,
     interactive_terminal: bool,
+    log_level_override: Option<LevelFilter>,
 ) -> Result<(), &'static TelemetryError> {
     TRACING_INITIALISED
-        .get_or_init(|| initialise_tracing_once(service_name, interactive_terminal))
+        .get_or_init(|| {
+            initialise_tracing_once(service_name, interactive_terminal, log_level_override)
+        })
         .as_ref()
         .copied()
 }
@@ -32,12 +36,13 @@ pub(crate) fn initialise_tracing(
 fn initialise_tracing_once(
     service_name: &str,
     interactive_terminal: bool,
+    log_level_override: Option<LevelFilter>,
 ) -> Result<(), TelemetryError> {
     let tracer_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder().build();
     let tracer = tracer_provider.tracer(service_name.to_owned());
     global::set_tracer_provider(tracer_provider);
 
-    let log_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
+    let log_filter = configured_log_filter(log_level_override);
     let is_interactive = interactive_terminal && io::stderr().is_terminal();
 
     if is_interactive {
@@ -53,7 +58,7 @@ fn initialise_tracing_once(
         tracing_subscriber::registry()
             .with(formatting_layer.with_filter(log_filter.clone()))
             .with(progress_layer)
-            .with(OpenTelemetryLayer::new(tracer.clone()))
+            .with(OpenTelemetryLayer::new(tracer.clone()).with_filter(log_filter.clone()))
             .try_init()?;
     } else {
         tracing_subscriber::registry()
@@ -61,13 +66,20 @@ fn initialise_tracing_once(
                 fmt::layer()
                     .json()
                     .with_target(false)
-                    .with_filter(log_filter),
+                    .with_filter(log_filter.clone()),
             )
-            .with(OpenTelemetryLayer::new(tracer))
+            .with(OpenTelemetryLayer::new(tracer).with_filter(log_filter))
             .try_init()?;
     }
 
     Ok(())
+}
+
+fn configured_log_filter(log_level_override: Option<LevelFilter>) -> EnvFilter {
+    match log_level_override {
+        Some(level) => EnvFilter::new(level.to_string()),
+        None => EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn")),
+    }
 }
 
 fn progress_style() -> ProgressStyle {

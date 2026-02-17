@@ -3,6 +3,7 @@ use std::io;
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
 use time::OffsetDateTime;
+use tracing::instrument;
 
 use crate::hw::HardwareClient;
 use crate::{
@@ -217,6 +218,7 @@ fn parse_brightness(value: &str) -> Result<Brightness, String> {
 }
 
 /// Executes the `control` command.
+#[instrument(skip(client, args, out), level = "info", fields(action = ?args.action))]
 pub(crate) async fn run<W>(
     client: Box<dyn HardwareClient>,
     args: &ControlArgs,
@@ -234,12 +236,13 @@ where
         if command_result.is_ok() {
             return Err(error.into());
         }
-        tracing::debug!(?error, "failed to close control session cleanly");
+        tracing::trace!(?error, "failed to close control session cleanly");
     }
 
     command_result
 }
 
+#[instrument(skip(session, args, out), level = "debug", fields(action = ?args.action))]
 async fn run_with_session<W>(
     session: &crate::DeviceSession,
     args: &ControlArgs,

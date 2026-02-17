@@ -1,6 +1,7 @@
 use std::io;
 
 use anyhow::Result;
+use tracing::instrument;
 
 use crate::hw::HardwareClient;
 use crate::terminal::TerminalClient;
@@ -8,6 +9,7 @@ use crate::terminal::TerminalClient;
 use super::ui::{InspectReportView, Painter};
 
 /// Executes the `inspect` command.
+#[instrument(skip(client, out, terminal_client), level = "info")]
 pub(crate) async fn run<W>(
     client: Box<dyn HardwareClient>,
     out: &mut W,

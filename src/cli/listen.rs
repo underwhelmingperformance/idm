@@ -2,6 +2,7 @@ use clap::Args;
 use std::io;
 
 use anyhow::Result;
+use tracing::instrument;
 
 use crate::hw::{HardwareClient, ListenSummary};
 use crate::protocol::EndpointId;
@@ -33,6 +34,11 @@ impl ListenArgs {
 }
 
 /// Executes the `listen` command.
+#[instrument(
+    skip(client, args, out, terminal_client),
+    level = "info",
+    fields(max_notifications = ?args.max_notifications())
+)]
 pub(crate) async fn run<W>(
     client: Box<dyn HardwareClient>,
     args: &ListenArgs,
@@ -46,6 +52,11 @@ where
 }
 
 /// Executes listen with an explicit notification limit.
+#[instrument(
+    skip(client, out, terminal_client),
+    level = "info",
+    fields(max_notifications = ?max_notifications)
+)]
 pub(crate) async fn run_with_limit<W>(
     client: Box<dyn HardwareClient>,
     max_notifications: Option<usize>,
@@ -97,7 +108,7 @@ where
         .await;
 
     if let Err(error) = session.unsubscribe_endpoint(endpoint).await {
-        tracing::debug!(?error, "failed to unsubscribe cleanly");
+        tracing::trace!(?error, "failed to unsubscribe cleanly");
     }
     session.close().await?;
 

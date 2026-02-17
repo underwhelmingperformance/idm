@@ -12,10 +12,11 @@ mod utils;
 pub use app::{
     SessionHandler, fake_hardware_client, real_hardware_client,
     real_hardware_client_with_model_resolution, run, run_with_clients,
+    run_with_clients_and_log_level, run_with_log_level,
 };
 pub use cli::{
     Args, BrightnessArgs, ColourArgs, Command, ControlAction, ControlArgs, FakeArgs, ListenArgs,
-    PowerArgs, PowerState, SyncTimeArgs, TextArgs,
+    LogLevel, PowerArgs, PowerState, SyncTimeArgs, TextArgs,
 };
 pub use error::{FixtureError, InteractionError, ProtocolError};
 pub use handlers::{

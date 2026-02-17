@@ -1,6 +1,7 @@
 use crate::error::ProtocolError;
 use crate::hw::{DeviceSession, WriteMode};
 use crate::protocol::EndpointId;
+use tracing::instrument;
 
 use super::{FrameCodec, FrameCodecError};
 
@@ -52,6 +53,11 @@ impl FullscreenColourHandler {
     /// # Errors
     ///
     /// Returns an error when frame encoding fails or the BLE write fails.
+    #[instrument(
+        skip(session),
+        level = "debug",
+        fields(red = colour.r, green = colour.g, blue = colour.b)
+    )]
     pub async fn set_colour(session: &DeviceSession, colour: Rgb) -> Result<(), ProtocolError> {
         let frame = Self::frame_for(colour)?;
         session

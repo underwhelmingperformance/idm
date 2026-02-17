@@ -1,4 +1,5 @@
 use time::OffsetDateTime;
+use tracing::instrument;
 
 use crate::error::ProtocolError;
 use crate::hw::{DeviceSession, WriteMode};
@@ -42,6 +43,11 @@ impl TimeSyncHandler {
     /// # Errors
     ///
     /// Returns an error when frame encoding fails or the BLE write fails.
+    #[instrument(
+        skip(session),
+        level = "debug",
+        fields(unix_timestamp = timestamp.unix_timestamp())
+    )]
     pub async fn sync_time(
         session: &DeviceSession,
         timestamp: OffsetDateTime,

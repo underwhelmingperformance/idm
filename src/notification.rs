@@ -1,4 +1,5 @@
 use thiserror::Error;
+use tracing::instrument;
 
 /// Typed notification events emitted by iDotMatrix devices.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -27,6 +28,7 @@ impl NotificationHandler {
     /// # Errors
     ///
     /// Returns an error when the payload is empty.
+    #[instrument(skip(payload), level = "trace", fields(payload_len = payload.len()))]
     pub fn decode(payload: &[u8]) -> Result<NotifyEvent, NotificationDecodeError> {
         if payload.is_empty() {
             return Err(NotificationDecodeError::EmptyPayload);
