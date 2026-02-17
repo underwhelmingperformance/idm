@@ -16,7 +16,8 @@ use super::DeviceProfile;
 use super::hardware::{ConnectedBleSession, WriteMode, missing_required_endpoints};
 use super::model::{
     CharacteristicInfo, EndpointPresence, FoundDevice, InspectReport, LedInfoQueryOutcome,
-    ListenStopReason, NotificationRunSummary, ServiceInfo, SessionMetadata,
+    ListenStopReason, NotificationRunSummary, ScreenLightQueryOutcome, ServiceInfo,
+    SessionMetadata,
 };
 use super::model_overrides::{ModelOverrideStore, ModelResolutionConfig, is_supported_led_type};
 use super::model_resolution_diagnostics::{
@@ -30,6 +31,7 @@ use crate::protocol::{self, EndpointId};
 
 const LED_INFO_QUERY_TIMEOUT_MS: u64 = 1_000;
 const GET_LED_INFO_QUERY: [u8; 4] = [0x04, 0x00, 0x01, 0x80];
+const READ_SCREEN_LIGHT_TIMEOUT_QUERY: [u8; 5] = [0x05, 0x00, 0x0F, 0x80, 0xFF];
 
 #[derive(Debug)]
 struct LedInfoQueryResult {
@@ -92,6 +94,58 @@ enum LedInfoProbeResult {
         response: super::LedInfoResponse,
         payload: Vec<u8>,
     },
+    InvalidPayload(Vec<u8>),
+    NoResponse,
+}
+
+#[derive(Debug)]
+struct ScreenLightQueryResult {
+    timeout: Option<u8>,
+    outcome: ScreenLightQueryOutcome,
+    write_modes_attempted: Vec<String>,
+    last_payload: Option<Vec<u8>>,
+}
+
+impl ScreenLightQueryResult {
+    fn skipped(outcome: ScreenLightQueryOutcome) -> Self {
+        Self {
+            timeout: None,
+            outcome,
+            write_modes_attempted: Vec::new(),
+            last_payload: None,
+        }
+    }
+
+    fn resolved(
+        timeout: u8,
+        outcome: ScreenLightQueryOutcome,
+        write_modes_attempted: Vec<String>,
+    ) -> Self {
+        Self {
+            timeout: Some(timeout),
+            outcome,
+            write_modes_attempted,
+            last_payload: None,
+        }
+    }
+
+    fn unresolved(
+        outcome: ScreenLightQueryOutcome,
+        write_modes_attempted: Vec<String>,
+        last_payload: Option<Vec<u8>>,
+    ) -> Self {
+        Self {
+            timeout: None,
+            outcome,
+            write_modes_attempted,
+            last_payload,
+        }
+    }
+}
+
+#[derive(Debug)]
+enum ScreenLightProbeResult {
+    Parsed { timeout_value: u8, payload: Vec<u8> },
     InvalidPayload(Vec<u8>),
     NoResponse,
 }
@@ -236,6 +290,8 @@ impl BtleplugBackend {
             select_led_type_override(&connected.device, &self.model_resolution)?;
         let led_info_query =
             query_led_info(&connected.peripheral, &characteristics_by_endpoint).await;
+        let screen_light_query =
+            query_screen_light_timeout(&connected.peripheral, &characteristics_by_endpoint).await;
         let led_info = led_info_query.led_info;
         let device_routing_profile =
             resolve_device_routing_profile(&connected.device, led_info, selected_led_type);
@@ -264,10 +320,15 @@ impl BtleplugBackend {
         let connection_diagnostics = model_resolution_diagnostics(
             connected.device.scan_identity().copied(),
             Some(&connected.scan_properties_debug),
+            led_info,
             led_info_query.outcome,
             led_info_query.write_modes_attempted,
             led_info_query.sync_time_fallback_attempted,
             led_info_query.last_payload,
+            screen_light_query.outcome,
+            screen_light_query.write_modes_attempted,
+            screen_light_query.last_payload,
+            screen_light_query.timeout,
         );
         let session_metadata =
             SessionMetadata::new(true, write_without_response_limit, device_profile)
@@ -526,6 +587,123 @@ async fn query_led_info(
     }
 }
 
+#[instrument(skip(peripheral, characteristics_by_endpoint), level = "debug")]
+async fn query_screen_light_timeout(
+    peripheral: &Peripheral,
+    characteristics_by_endpoint: &HashMap<EndpointId, Characteristic>,
+) -> ScreenLightQueryResult {
+    let Some(write_characteristic) =
+        characteristics_by_endpoint.get(&EndpointId::WriteCharacteristic)
+    else {
+        return ScreenLightQueryResult::skipped(
+            ScreenLightQueryOutcome::SkippedNoWriteCharacteristic,
+        );
+    };
+    let Some(read_characteristic) =
+        characteristics_by_endpoint.get(&EndpointId::ReadNotifyCharacteristic)
+    else {
+        return ScreenLightQueryResult::skipped(ScreenLightQueryOutcome::SkippedNoNotifyOrRead);
+    };
+
+    let supports_read = read_characteristic.properties.contains(CharPropFlags::READ);
+    let supports_notify = read_characteristic
+        .properties
+        .intersects(CharPropFlags::NOTIFY | CharPropFlags::INDICATE);
+    if !supports_read && !supports_notify {
+        return ScreenLightQueryResult::skipped(ScreenLightQueryOutcome::SkippedNoNotifyOrRead);
+    }
+
+    let write_types = write_types_for_characteristic(write_characteristic.properties);
+    if write_types.is_empty() {
+        return ScreenLightQueryResult::skipped(
+            ScreenLightQueryOutcome::SkippedNoWriteCharacteristic,
+        );
+    }
+
+    let mut attempted_modes = Vec::with_capacity(write_types.len().saturating_mul(2));
+    let mut last_payload = None;
+
+    for write_type in write_types.iter().copied() {
+        attempted_modes.push(format!(
+            "{}:read_screen_light",
+            write_type_label(write_type)
+        ));
+
+        if supports_notify {
+            match query_screen_light_timeout_via_notify(
+                peripheral,
+                write_characteristic,
+                write_type,
+                read_characteristic,
+            )
+            .await
+            {
+                ScreenLightProbeResult::Parsed {
+                    timeout_value,
+                    payload: _payload,
+                } => {
+                    return ScreenLightQueryResult::resolved(
+                        timeout_value,
+                        ScreenLightQueryOutcome::ParsedNotify,
+                        attempted_modes,
+                    );
+                }
+                ScreenLightProbeResult::InvalidPayload(payload) => {
+                    last_payload = Some(payload);
+                    if !supports_read {
+                        continue;
+                    }
+                }
+                ScreenLightProbeResult::NoResponse => {
+                    if !supports_read {
+                        continue;
+                    }
+                }
+            }
+        }
+
+        if supports_read {
+            match query_screen_light_timeout_via_read(
+                peripheral,
+                write_characteristic,
+                write_type,
+                read_characteristic,
+            )
+            .await
+            {
+                ScreenLightProbeResult::Parsed {
+                    timeout_value,
+                    payload: _payload,
+                } => {
+                    return ScreenLightQueryResult::resolved(
+                        timeout_value,
+                        ScreenLightQueryOutcome::ParsedRead,
+                        attempted_modes,
+                    );
+                }
+                ScreenLightProbeResult::InvalidPayload(payload) => {
+                    last_payload = Some(payload);
+                }
+                ScreenLightProbeResult::NoResponse => {}
+            }
+        }
+    }
+
+    if last_payload.is_some() {
+        ScreenLightQueryResult::unresolved(
+            ScreenLightQueryOutcome::InvalidResponse,
+            attempted_modes,
+            last_payload,
+        )
+    } else {
+        ScreenLightQueryResult::unresolved(
+            ScreenLightQueryOutcome::NoResponse,
+            attempted_modes,
+            None,
+        )
+    }
+}
+
 #[instrument(
     skip(peripheral, write_characteristic, read_characteristic, query),
     level = "trace",
@@ -664,6 +842,157 @@ async fn query_led_info_via_read(
             LedInfoProbeResult::NoResponse
         }
     }
+}
+
+#[instrument(
+    skip(peripheral, write_characteristic, read_characteristic),
+    level = "trace",
+    fields(?write_type)
+)]
+async fn query_screen_light_timeout_via_notify(
+    peripheral: &Peripheral,
+    write_characteristic: &Characteristic,
+    write_type: WriteType,
+    read_characteristic: &Characteristic,
+) -> ScreenLightProbeResult {
+    let mut notifications = match peripheral.notifications().await {
+        Ok(stream) => stream,
+        Err(error) => {
+            trace!(
+                ?error,
+                "failed to open notification stream for screen-light query"
+            );
+            return ScreenLightProbeResult::NoResponse;
+        }
+    };
+
+    if let Err(error) = peripheral.subscribe(read_characteristic).await {
+        trace!(
+            ?error,
+            "failed to subscribe for screen-light query notifications"
+        );
+        return ScreenLightProbeResult::NoResponse;
+    }
+
+    if let Err(error) = peripheral
+        .write(
+            write_characteristic,
+            &READ_SCREEN_LIGHT_TIMEOUT_QUERY,
+            write_type,
+        )
+        .await
+    {
+        let _ = peripheral.unsubscribe(read_characteristic).await;
+        trace!(?error, "failed to write screen-light timeout query");
+        return ScreenLightProbeResult::NoResponse;
+    }
+
+    let deadline = tokio::time::Instant::now() + Duration::from_millis(LED_INFO_QUERY_TIMEOUT_MS);
+    let mut first_invalid_payload = None;
+    loop {
+        let now = tokio::time::Instant::now();
+        if now >= deadline {
+            let _ = peripheral.unsubscribe(read_characteristic).await;
+            return first_invalid_payload.map_or(
+                ScreenLightProbeResult::NoResponse,
+                ScreenLightProbeResult::InvalidPayload,
+            );
+        }
+
+        let remaining = deadline - now;
+        let notification = match timeout(remaining, notifications.next()).await {
+            Ok(Some(value)) => value,
+            Ok(None) => {
+                let _ = peripheral.unsubscribe(read_characteristic).await;
+                return first_invalid_payload.map_or(
+                    ScreenLightProbeResult::NoResponse,
+                    ScreenLightProbeResult::InvalidPayload,
+                );
+            }
+            Err(_elapsed) => {
+                let _ = peripheral.unsubscribe(read_characteristic).await;
+                return first_invalid_payload.map_or(
+                    ScreenLightProbeResult::NoResponse,
+                    ScreenLightProbeResult::InvalidPayload,
+                );
+            }
+        };
+
+        if !notification.uuid.eq(&read_characteristic.uuid) {
+            continue;
+        }
+
+        let payload = notification.value;
+        if let Some(timeout_value) = parse_screen_light_timeout_response(&payload) {
+            let _ = peripheral.unsubscribe(read_characteristic).await;
+            return ScreenLightProbeResult::Parsed {
+                timeout_value,
+                payload,
+            };
+        }
+
+        if first_invalid_payload.is_none() {
+            first_invalid_payload = Some(payload);
+        }
+    }
+}
+
+#[instrument(
+    skip(peripheral, write_characteristic, read_characteristic),
+    level = "trace",
+    fields(?write_type)
+)]
+async fn query_screen_light_timeout_via_read(
+    peripheral: &Peripheral,
+    write_characteristic: &Characteristic,
+    write_type: WriteType,
+    read_characteristic: &Characteristic,
+) -> ScreenLightProbeResult {
+    if let Err(error) = peripheral
+        .write(
+            write_characteristic,
+            &READ_SCREEN_LIGHT_TIMEOUT_QUERY,
+            write_type,
+        )
+        .await
+    {
+        trace!(?error, "failed to write screen-light timeout query");
+        return ScreenLightProbeResult::NoResponse;
+    }
+
+    match timeout(
+        Duration::from_millis(LED_INFO_QUERY_TIMEOUT_MS),
+        peripheral.read(read_characteristic),
+    )
+    .await
+    {
+        Ok(Ok(payload)) => {
+            if let Some(timeout_value) = parse_screen_light_timeout_response(&payload) {
+                ScreenLightProbeResult::Parsed {
+                    timeout_value,
+                    payload,
+                }
+            } else {
+                ScreenLightProbeResult::InvalidPayload(payload)
+            }
+        }
+        Ok(Err(error)) => {
+            trace!(?error, "failed to read screen-light timeout response");
+            ScreenLightProbeResult::NoResponse
+        }
+        Err(_elapsed) => ScreenLightProbeResult::NoResponse,
+    }
+}
+
+fn parse_screen_light_timeout_response(payload: &[u8]) -> Option<u8> {
+    if payload.len() < 5 {
+        return None;
+    }
+    if payload[2] != 0x0F || payload[3] != 0x80 {
+        return None;
+    }
+
+    Some(payload[4])
 }
 
 fn write_type_label(write_type: WriteType) -> &'static str {
@@ -1162,5 +1491,17 @@ mod tests {
             ],
             frame
         );
+    }
+
+    #[rstest]
+    #[case(&[0x05, 0x00, 0x0F, 0x80, 0x1E], Some(0x1E))]
+    #[case(&[0x04, 0x00, 0x0F, 0x80], None)]
+    #[case(&[0x05, 0x00, 0x01, 0x80, 0x04], None)]
+    fn parse_screen_light_timeout_response_matches_expected(
+        #[case] payload: &[u8],
+        #[case] expected: Option<u8>,
+    ) {
+        let parsed = parse_screen_light_timeout_response(payload);
+        assert_eq!(expected, parsed);
     }
 }

@@ -196,7 +196,7 @@ impl EndpointPresence {
 }
 
 /// Connection metadata discovered during session setup.
-#[derive(Debug, Clone, Eq, PartialEq, derive_more::Display)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, derive_more::Display)]
 pub(crate) enum LedInfoQueryOutcome {
     #[display("skipped_no_notify_or_read")]
     SkippedNoNotifyOrRead,
@@ -212,6 +212,23 @@ pub(crate) enum LedInfoQueryOutcome {
     ParsedRead,
     #[display("parsed_notify_after_sync_time")]
     ParsedNotifyAfterSyncTime,
+}
+
+/// Connection metadata discovered during screen-light query.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, derive_more::Display)]
+pub(crate) enum ScreenLightQueryOutcome {
+    #[display("skipped_no_notify_or_read")]
+    SkippedNoNotifyOrRead,
+    #[display("skipped_no_write_characteristic")]
+    SkippedNoWriteCharacteristic,
+    #[display("no_response")]
+    NoResponse,
+    #[display("invalid_response")]
+    InvalidResponse,
+    #[display("parsed_notify")]
+    ParsedNotify,
+    #[display("parsed_read")]
+    ParsedRead,
 }
 
 /// Connection metadata discovered during session setup.
