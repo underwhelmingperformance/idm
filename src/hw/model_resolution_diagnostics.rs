@@ -107,11 +107,8 @@ impl ScanIdentitySection {
 }
 
 #[derive(Debug, Clone, Eq, PartialEq, DiagnosticsSection)]
-#[diagnostics(
-    id = "corebluetooth_advertisement",
-    section = "CoreBluetooth advertisement"
-)]
-struct CoreBluetoothAdvertisementSection {
+#[diagnostics(id = "advertisement_data", section = "Advertisement data")]
+struct AdvertisementDataSection {
     #[diagnostic(name = "Manufacturer data")]
     manufacturer_data: NoneOr<JoinedStrings>,
     #[diagnostic(name = "Service data")]
@@ -120,7 +117,7 @@ struct CoreBluetoothAdvertisementSection {
     services: NoneOr<JoinedStrings>,
 }
 
-impl CoreBluetoothAdvertisementSection {
+impl AdvertisementDataSection {
     fn from_scan_properties(scan_properties_debug: Option<&ScanPropertiesDebug>) -> Self {
         let Some(scan_debug) = scan_properties_debug else {
             return Self {
@@ -200,7 +197,7 @@ struct ModelResolutionSections {
     #[diagnostic]
     scan_identity: ScanIdentitySection,
     #[diagnostic]
-    corebluetooth_advertisement: CoreBluetoothAdvertisementSection,
+    advertisement_data: AdvertisementDataSection,
     #[diagnostic]
     led_info_probe: LedInfoProbeSection,
 }
@@ -216,9 +213,7 @@ pub(crate) fn model_resolution_diagnostics(
 ) -> ConnectionDiagnostics {
     let sections = ModelResolutionSections {
         scan_identity: ScanIdentitySection::from_scan_identity(scan_identity),
-        corebluetooth_advertisement: CoreBluetoothAdvertisementSection::from_scan_properties(
-            scan_properties_debug,
-        ),
+        advertisement_data: AdvertisementDataSection::from_scan_properties(scan_properties_debug),
         led_info_probe: LedInfoProbeSection::from_led_info_probe(
             led_info_query_outcome,
             led_info_write_modes_attempted,
@@ -300,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn corebluetooth_and_led_info_sections_render_expected_values() {
+    fn advertisement_and_led_info_sections_render_expected_values() {
         let scan_properties_debug = ScanPropertiesDebug::new(
             vec![ManufacturerDataRecord::new(
                 0x5254,
@@ -339,7 +334,7 @@ mod tests {
                     "000000fa-0000-1000-8000-00805f9b34fb".to_string(),
                 ),
             ],
-            section_rows(&diagnostics, "corebluetooth_advertisement")
+            section_rows(&diagnostics, "advertisement_data")
         );
         assert_eq!(
             vec![

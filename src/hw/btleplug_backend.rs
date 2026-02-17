@@ -1038,7 +1038,7 @@ mod tests {
     }
 
     #[test]
-    fn scan_properties_debug_preserves_raw_corebluetooth_fields() {
+    fn scan_properties_debug_preserves_raw_advertisement_fields() {
         let mut properties = PeripheralProperties::default();
         properties
             .manufacturer_data
