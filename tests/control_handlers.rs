@@ -54,7 +54,7 @@ async fn text_upload_handler_writes_expected_payload_size() -> anyhow::Result<()
     let receipt =
         idm::TextUploadHandler::upload(&session, idm::TextUploadRequest::new("Hi")).await?;
 
-    assert_eq!(166, receipt.bytes_written());
+    assert_eq!(70, receipt.bytes_written());
     assert_eq!(1, receipt.chunks_written());
     session.close().await?;
     Ok(())

@@ -188,7 +188,7 @@ async fn control_text_command_uploads_payload() -> anyhow::Result<()> {
     .await?;
 
     assert_eq!(
-        "Uploaded text payload: 166 bytes in 1 chunk(s)",
+        "Uploaded text payload: 70 bytes in 1 chunk(s)",
         stdout.trim_end()
     );
     Ok(())

@@ -300,11 +300,8 @@ Behaviour:
 
 ## Text Upload Handler
 
-Status: `TODO`  
+Status: `DONE`  
 Priority: `P0`  
-Comment: Reset from `DONE` on `2026-02-16`. Current upload path is still
-legacy-oriented (single glyph-stream strategy and limited ACK decoding) and does
-not yet cover all text variants and family-specific notify semantics.
 
 Protocol references:
 

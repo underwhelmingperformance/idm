@@ -7,7 +7,7 @@ use tokio::time::timeout;
 use tracing::instrument;
 
 use crate::error::ProtocolError;
-use crate::hw::{DeviceSession, WriteMode};
+use crate::hw::{DeviceSession, TextPath, WriteMode};
 use crate::protocol::EndpointId;
 use crate::{
     FrameCodec, NotificationDecodeError, NotificationHandler, NotifyEvent, Rgb, TransferFamily,
@@ -16,15 +16,11 @@ use crate::{
 use super::FrameCodecError;
 
 const METADATA_LEN: usize = 14;
+const LOGICAL_CHUNK_SIZE: usize = 4096;
+const DEFAULT_NOTIFY_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 const UNUSABLE_WRITE_WITHOUT_RESPONSE_LIMIT: usize = 20;
-const GLYPH_PREFIX: [u8; 4] = [0x05, 0xFF, 0xFF, 0xFF];
-const GLYPH_WIDTH: usize = 16;
-const GLYPH_HEIGHT: usize = 32;
-const GLYPH_BYTES: usize = (GLYPH_WIDTH * GLYPH_HEIGHT) / 8;
 const FONT_BITMAP_WIDTH: usize = 8;
 const FONT_BITMAP_HEIGHT: usize = 8;
-const SCALE_X: usize = 2;
-const SCALE_Y: usize = 4;
 
 /// Errors returned by text upload operations.
 #[derive(Debug, Error)]
@@ -67,6 +63,7 @@ pub struct TextOptions {
     text_colour: Rgb,
     background_mode: u8,
     background_colour: Rgb,
+    font_size: u8,
 }
 
 impl Default for TextOptions {
@@ -78,6 +75,7 @@ impl Default for TextOptions {
             text_colour: Rgb::new(0xFF, 0xFF, 0xFF),
             background_mode: 0x00,
             background_colour: Rgb::new(0x00, 0x00, 0x00),
+            font_size: 16,
         }
     }
 }
@@ -107,7 +105,18 @@ impl TextOptions {
             text_colour,
             background_mode,
             background_colour,
+            font_size: 16,
         }
+    }
+
+    /// Overrides font size used by `32x32` and `64x64` text paths.
+    ///
+    /// Supported values are `16`, `32`, and `64`. Invalid values are treated
+    /// as `16` during encoding.
+    #[must_use]
+    pub fn with_font_size(mut self, font_size: u8) -> Self {
+        self.font_size = font_size;
+        self
     }
 }
 
@@ -120,7 +129,7 @@ pub struct TextUploadRequest {
 }
 
 impl TextUploadRequest {
-    /// Creates a text upload request with default options and no pacing.
+    /// Creates a text upload request with default options and notify-ack pacing.
     ///
     /// ```
     /// use idm::TextUploadRequest;
@@ -133,7 +142,9 @@ impl TextUploadRequest {
         Self {
             text: text.into(),
             options: TextOptions::default(),
-            pacing: UploadPacing::None,
+            pacing: UploadPacing::NotifyAck {
+                timeout: DEFAULT_NOTIFY_ACK_TIMEOUT,
+            },
         }
     }
 
@@ -258,10 +269,11 @@ impl TextUploadHandler {
             "starting text upload"
         );
         ensure_text_path_is_resolved(session)?;
-        let frame = build_upload_frame(&request)?;
+        let frame_blocks = build_upload_blocks(session, &request)?;
         let chunk_size = write_chunk_size(session)?;
 
         let mut chunks_written = 0usize;
+        let mut bytes_written = 0usize;
         let endpoint = EndpointId::ReadNotifyCharacteristic;
         let use_notify = matches!(request.pacing, UploadPacing::NotifyAck { .. });
 
@@ -270,19 +282,23 @@ impl TextUploadHandler {
         }
 
         let upload_result = async {
-            for chunk in frame.chunks(chunk_size) {
-                session
-                    .write_endpoint(
-                        EndpointId::WriteCharacteristic,
-                        chunk,
-                        WriteMode::WithoutResponse,
-                    )
-                    .await?;
-                chunks_written += 1;
-                apply_pacing(session, request.pacing).await?;
+            for block in &frame_blocks {
+                for transport_chunk in block.chunks(chunk_size) {
+                    session
+                        .write_endpoint(
+                            EndpointId::WriteCharacteristic,
+                            transport_chunk,
+                            WriteMode::WithoutResponse,
+                        )
+                        .await?;
+                    bytes_written += transport_chunk.len();
+                    chunks_written += 1;
+                    apply_transport_pacing(request.pacing).await?;
+                }
+                apply_block_pacing(session, request.pacing).await?;
             }
 
-            Ok(UploadReceipt::new(frame.len(), chunks_written))
+            Ok(UploadReceipt::new(bytes_written, chunks_written))
         }
         .await;
 
@@ -328,9 +344,8 @@ fn ensure_text_path_is_resolved(session: &DeviceSession) -> Result<(), ProtocolE
     Ok(())
 }
 
-#[instrument(skip(session), level = "trace", fields(?pacing))]
-async fn apply_pacing(session: &DeviceSession, pacing: UploadPacing) -> Result<(), ProtocolError> {
-    tracing::trace!(?pacing, "applying upload pacing");
+#[instrument(level = "trace", fields(?pacing))]
+async fn apply_transport_pacing(pacing: UploadPacing) -> Result<(), ProtocolError> {
     match pacing {
         UploadPacing::None => Ok(()),
         UploadPacing::Delay { per_chunk } => {
@@ -339,12 +354,18 @@ async fn apply_pacing(session: &DeviceSession, pacing: UploadPacing) -> Result<(
             }
             Ok(())
         }
-        UploadPacing::NotifyAck {
-            timeout: timeout_duration,
-        } => {
-            wait_for_notify_ack(session, timeout_duration).await?;
-            Ok(())
-        }
+        UploadPacing::NotifyAck { timeout: _ } => Ok(()),
+    }
+}
+
+#[instrument(skip(session), level = "trace", fields(?pacing))]
+async fn apply_block_pacing(
+    session: &DeviceSession,
+    pacing: UploadPacing,
+) -> Result<(), ProtocolError> {
+    match pacing {
+        UploadPacing::None | UploadPacing::Delay { .. } => Ok(()),
+        UploadPacing::NotifyAck { timeout } => wait_for_notify_ack(session, timeout).await,
     }
 }
 
@@ -390,9 +411,29 @@ async fn wait_for_notify_ack(
     }
 }
 
-fn build_upload_frame(request: &TextUploadRequest) -> Result<Vec<u8>, ProtocolError> {
-    let metadata = encode_metadata(&request.text, request.options)?;
-    let glyph_stream = encode_glyph_stream(&request.text)?;
+#[derive(Debug, Clone, Copy)]
+struct TextEncodingContext {
+    text_path: TextPath,
+    led_type: Option<u8>,
+}
+
+fn encoding_context(session: &DeviceSession) -> TextEncodingContext {
+    let routing_profile = session.device_routing_profile();
+    TextEncodingContext {
+        text_path: routing_profile
+            .and_then(|profile| profile.text_path)
+            .unwrap_or(TextPath::Path1616),
+        led_type: routing_profile.and_then(|profile| profile.led_type),
+    }
+}
+
+fn build_upload_blocks(
+    session: &DeviceSession,
+    request: &TextUploadRequest,
+) -> Result<Vec<Vec<u8>>, ProtocolError> {
+    let context = encoding_context(session);
+    let metadata = encode_metadata(&request.text, request.options, context)?;
+    let glyph_stream = encode_glyph_stream(&request.text, request.options, context)?;
 
     let mut logical_payload = Vec::with_capacity(metadata.len() + glyph_stream.len());
     logical_payload.extend_from_slice(&metadata);
@@ -405,25 +446,35 @@ fn build_upload_frame(request: &TextUploadRequest) -> Result<Vec<u8>, ProtocolEr
             max_payload_len: u16::MAX - 16,
         }
     })?;
-    let header_fields = crate::TextHeaderFields::new(
-        u16::try_from(logical_payload.len()).map_err(|_overflow| {
+
+    let mut blocks = Vec::new();
+    for (index, logical_chunk) in logical_payload.chunks(LOGICAL_CHUNK_SIZE).enumerate() {
+        let chunk_len = u16::try_from(logical_chunk.len()).map_err(|_overflow| {
             FrameCodecError::HeaderPayloadTooLarge {
                 payload_len: u16::MAX,
                 max_payload_len: u16::MAX - 16,
             }
-        })?,
-        payload_len_u32,
-        crc32,
-    )?;
-    let header = FrameCodec::encode_text_header(header_fields);
+        })?;
+        let header_fields = crate::TextHeaderFields::new(chunk_len, payload_len_u32, crc32)?;
+        let mut header = FrameCodec::encode_text_header(header_fields);
+        if index > 0 {
+            header[4] = 0x02;
+        }
 
-    let mut full_frame = Vec::with_capacity(header.len() + logical_payload.len());
-    full_frame.extend_from_slice(&header);
-    full_frame.extend_from_slice(&logical_payload);
-    Ok(full_frame)
+        let mut block = Vec::with_capacity(header.len() + logical_chunk.len());
+        block.extend_from_slice(&header);
+        block.extend_from_slice(logical_chunk);
+        blocks.push(block);
+    }
+
+    Ok(blocks)
 }
 
-fn encode_metadata(text: &str, options: TextOptions) -> Result<[u8; METADATA_LEN], ProtocolError> {
+fn encode_metadata(
+    text: &str,
+    options: TextOptions,
+    context: TextEncodingContext,
+) -> Result<[u8; METADATA_LEN], ProtocolError> {
     let char_count = text.chars().count();
     if char_count == 0 {
         return Err(TextUploadError::EmptyText.into());
@@ -442,15 +493,17 @@ fn encode_metadata(text: &str, options: TextOptions) -> Result<[u8; METADATA_LEN
         })?;
 
     let mut metadata = [0u8; METADATA_LEN];
-    metadata[0..2].copy_from_slice(&char_count_u16.to_le_bytes());
-    metadata[2] = 0x00;
-    metadata[3] = 0x01;
-    metadata[4] = options.text_mode;
+    metadata[0..2].copy_from_slice(&char_count_u16.to_be_bytes());
+    let (resolution_flag_1, resolution_flag_2) = text_path_resolution_flags(context.text_path);
+    metadata[2] = resolution_flag_1;
+    metadata[3] = resolution_flag_2;
+    metadata[4] = adjusted_text_mode(options.text_mode, context.led_type);
     metadata[5] = options.speed;
     metadata[6] = options.text_colour_mode;
-    metadata[7] = options.text_colour.r;
-    metadata[8] = options.text_colour.g;
-    metadata[9] = options.text_colour.b;
+    let text_colour = guarded_text_colour(options.text_colour);
+    metadata[7] = text_colour.r;
+    metadata[8] = text_colour.g;
+    metadata[9] = text_colour.b;
     metadata[10] = options.background_mode;
     metadata[11] = options.background_colour.r;
     metadata[12] = options.background_colour.g;
@@ -458,56 +511,166 @@ fn encode_metadata(text: &str, options: TextOptions) -> Result<[u8; METADATA_LEN
     Ok(metadata)
 }
 
-fn encode_glyph_stream(text: &str) -> Result<Vec<u8>, ProtocolError> {
+fn text_path_resolution_flags(text_path: TextPath) -> (u8, u8) {
+    match text_path {
+        TextPath::Path832 | TextPath::Path1664 => (0x00, 0x01),
+        TextPath::Path1616 | TextPath::Path3232 | TextPath::Path6464 => (0x01, 0x01),
+    }
+}
+
+fn adjusted_text_mode(text_mode: u8, led_type: Option<u8>) -> u8 {
+    if led_type == Some(2) {
+        text_mode.saturating_add(1)
+    } else {
+        text_mode
+    }
+}
+
+fn guarded_text_colour(text_colour: Rgb) -> Rgb {
+    if text_colour.r == 0x00 && text_colour.g == 0x00 && text_colour.b == 0x00 {
+        Rgb::new(0x00, 0x00, 0x01)
+    } else {
+        text_colour
+    }
+}
+
+fn encode_glyph_stream(
+    text: &str,
+    options: TextOptions,
+    context: TextEncodingContext,
+) -> Result<Vec<u8>, ProtocolError> {
     if text.is_empty() {
         return Err(TextUploadError::EmptyText.into());
     }
 
     let mut stream = Vec::new();
     for ch in text.chars() {
-        stream.extend_from_slice(&GLYPH_PREFIX);
-        stream.extend_from_slice(&encode_one_glyph(ch));
+        stream.extend_from_slice(&encode_one_glyph(ch, options, context));
     }
     Ok(stream)
 }
 
-fn encode_one_glyph(ch: char) -> [u8; GLYPH_BYTES] {
-    let bitmap = font_bitmap_for(ch);
-    let mut glyph = [0u8; GLYPH_BYTES];
+fn encode_one_glyph(ch: char, options: TextOptions, context: TextEncodingContext) -> Vec<u8> {
+    match context.text_path {
+        TextPath::Path832 => encode_832_glyph(ch),
+        TextPath::Path1616 | TextPath::Path1664 => {
+            encode_scaled_typed_glyph(ch, 0x02, 8, 16, 0x03, 16, 16)
+        }
+        TextPath::Path3232 => match normalised_font_size(options.font_size) {
+            32 => encode_scaled_typed_glyph(ch, 0x05, 16, 32, 0x06, 32, 32),
+            _ => encode_scaled_typed_glyph(ch, 0x02, 8, 16, 0x03, 16, 16),
+        },
+        TextPath::Path6464 => match normalised_font_size(options.font_size) {
+            64 => encode_scaled_typed_glyph(ch, 0x07, 32, 64, 0x08, 64, 64),
+            32 => encode_scaled_typed_glyph(ch, 0x05, 16, 32, 0x06, 32, 32),
+            _ => encode_scaled_typed_glyph(ch, 0x02, 8, 16, 0x03, 16, 16),
+        },
+    }
+}
 
-    for (font_y, row) in bitmap.iter().copied().enumerate() {
-        for font_x in 0..FONT_BITMAP_WIDTH {
-            let set = (row >> font_x) & 0x01 == 1;
+fn normalised_font_size(font_size: u8) -> u8 {
+    match font_size {
+        32 => 32,
+        64 => 64,
+        _ => 16,
+    }
+}
+
+fn encode_832_glyph(ch: char) -> Vec<u8> {
+    if let Some(bitmap) = font_bitmap_exact(ch) {
+        let mut glyph = Vec::with_capacity(4 + bitmap.len());
+        glyph.extend_from_slice(&[0x04, 0xFF, 0xFF, 0xFF]);
+        glyph.extend_from_slice(&bitmap);
+        return glyph;
+    }
+
+    if is_wide_char(ch) {
+        let mut glyph = Vec::with_capacity(4 + 24);
+        glyph.extend_from_slice(&[0x01, 0x00, 0x00, 0x00]);
+        glyph.extend_from_slice(&encode_scaled_bitmap(ch, 16, 12));
+        return glyph;
+    }
+
+    let mut glyph = Vec::with_capacity(4 + 8);
+    glyph.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]);
+    glyph.extend_from_slice(&encode_scaled_bitmap(ch, 8, 8));
+    glyph
+}
+
+fn encode_scaled_typed_glyph(
+    ch: char,
+    ascii_tag: u8,
+    ascii_width: usize,
+    ascii_height: usize,
+    wide_tag: u8,
+    wide_width: usize,
+    wide_height: usize,
+) -> Vec<u8> {
+    let is_wide = is_wide_char(ch);
+    let (tag, width, height) = if is_wide {
+        (wide_tag, wide_width, wide_height)
+    } else {
+        (ascii_tag, ascii_width, ascii_height)
+    };
+
+    let bitmap = encode_scaled_bitmap(ch, width, height);
+    let mut glyph = Vec::with_capacity(4 + bitmap.len());
+    glyph.extend_from_slice(&[tag, 0xFF, 0xFF, 0xFF]);
+    glyph.extend_from_slice(&bitmap);
+    glyph
+}
+
+fn encode_scaled_bitmap(ch: char, width: usize, height: usize) -> Vec<u8> {
+    let source = font_bitmap_for(ch);
+    let mut bitmap = vec![0u8; (width * height) / 8];
+
+    for y in 0..height {
+        let source_y = (y * FONT_BITMAP_HEIGHT) / height;
+        let source_row = source[source_y];
+        for x in 0..width {
+            let source_x = (x * FONT_BITMAP_WIDTH) / width;
+            let set = (source_row >> source_x) & 0x01 == 0x01;
             if !set {
                 continue;
             }
 
-            for dy in 0..SCALE_Y {
-                for dx in 0..SCALE_X {
-                    let x = font_x * SCALE_X + dx;
-                    let y = font_y * SCALE_Y + dy;
-                    let bit_index = y * GLYPH_WIDTH + x;
-                    let byte_index = bit_index / 8;
-                    let bit_offset = bit_index % 8;
-                    glyph[byte_index] |= 1 << bit_offset;
-                }
-            }
+            let bit_index = y * width + x;
+            let byte_index = bit_index / 8;
+            let bit_offset = bit_index % 8;
+            bitmap[byte_index] |= 1 << bit_offset;
         }
     }
 
-    glyph
+    bitmap
+}
+
+fn font_bitmap_exact(ch: char) -> Option<[u8; FONT_BITMAP_HEIGHT]> {
+    font8x8::BASIC_FONTS.get(ch)
 }
 
 fn font_bitmap_for(ch: char) -> [u8; FONT_BITMAP_HEIGHT] {
-    if let Some(bitmap) = font8x8::BASIC_FONTS.get(ch) {
-        return bitmap;
-    }
+    font_bitmap_exact(ch)
+        .or_else(|| font_bitmap_exact('?'))
+        .unwrap_or([0u8; FONT_BITMAP_HEIGHT])
+}
 
-    if let Some(fallback_bitmap) = font8x8::BASIC_FONTS.get('?') {
-        return fallback_bitmap;
-    }
-
-    [0u8; FONT_BITMAP_HEIGHT]
+fn is_wide_char(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x1100..=0x11FF
+            | 0x2E80..=0x2FFF
+            | 0x3000..=0x30FF
+            | 0x3130..=0x318F
+            | 0x31A0..=0x31BF
+            | 0x31F0..=0x31FF
+            | 0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xA960..=0xA97F
+            | 0xAC00..=0xD7AF
+            | 0xF900..=0xFAFF
+            | 0xFE30..=0xFE4F
+            | 0xFF00..=0xFFEF
+    )
 }
 
 #[cfg(test)]
@@ -518,48 +681,85 @@ mod tests {
 
     use super::*;
 
+    fn context(text_path: TextPath, led_type: Option<u8>) -> TextEncodingContext {
+        TextEncodingContext {
+            text_path,
+            led_type,
+        }
+    }
+
     #[test]
     fn metadata_encodes_expected_default_fields() {
-        let metadata =
-            encode_metadata("AB", TextOptions::default()).expect("metadata should encode");
+        let metadata = encode_metadata(
+            "AB",
+            TextOptions::default(),
+            context(TextPath::Path1616, None),
+        )
+        .expect("metadata should encode");
         assert_eq!(
             [
-                0x02, 0x00, 0x00, 0x01, 0x00, 0x20, 0x01, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x02, 0x01, 0x01, 0x00, 0x20, 0x01, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00,
             ],
             metadata
         );
     }
 
     #[test]
+    fn metadata_applies_led_type_mode_adjustment_and_colour_guard() {
+        let options =
+            TextOptions::new(0x00, 0x20, 0x01, Rgb::new(0, 0, 0), 0x00, Rgb::new(0, 0, 0));
+        let metadata = encode_metadata("A", options, context(TextPath::Path832, Some(2)))
+            .expect("metadata should encode");
+
+        assert_eq!(0x01, metadata[4]);
+        assert_eq!(0x00, metadata[7]);
+        assert_eq!(0x00, metadata[8]);
+        assert_eq!(0x01, metadata[9]);
+    }
+
+    #[test]
     fn metadata_rejects_empty_text() {
-        let result = encode_metadata("", TextOptions::default());
+        let result = encode_metadata(
+            "",
+            TextOptions::default(),
+            context(TextPath::Path1616, None),
+        );
         assert_matches!(result, Err(ProtocolError::TextUpload(_)));
     }
 
     #[test]
-    fn glyph_stream_prepends_prefix_per_character() {
-        let stream = encode_glyph_stream("A").expect("glyph stream should encode");
-        assert_eq!(&GLYPH_PREFIX, &stream[0..4]);
-        assert_eq!(4 + GLYPH_BYTES, stream.len());
+    fn glyph_stream_path_1616_uses_expected_tag_and_length() {
+        let stream = encode_glyph_stream(
+            "A",
+            TextOptions::default(),
+            context(TextPath::Path1616, None),
+        )
+        .expect("glyph stream should encode");
+
+        assert_eq!(&[0x02, 0xFF, 0xFF, 0xFF], &stream[0..4]);
+        assert_eq!(4 + 16, stream.len());
     }
 
     #[test]
-    fn upload_frame_has_header_and_payload() {
-        let request = TextUploadRequest::new("Hi");
-        let frame = build_upload_frame(&request).expect("frame should encode");
+    fn glyph_stream_path_832_uses_compact_ascii_tag() {
+        let stream = encode_glyph_stream(
+            "A",
+            TextOptions::default(),
+            context(TextPath::Path832, Some(2)),
+        )
+        .expect("glyph stream should encode");
 
-        let expected_payload = METADATA_LEN + (2 * (GLYPH_PREFIX.len() + GLYPH_BYTES));
-        assert_eq!(16 + expected_payload, frame.len());
-        assert_eq!(0x03, frame[2]);
-        assert_eq!(0x0C, frame[15]);
+        assert_eq!(&[0x04, 0xFF, 0xFF, 0xFF], &stream[0..4]);
+        assert_eq!(4 + 8, stream.len());
     }
 
     #[rstest]
-    #[case('A')]
-    #[case('?')]
-    #[case(' ')]
-    fn glyph_encoder_returns_expected_size(#[case] ch: char) {
-        let glyph = encode_one_glyph(ch);
-        assert_eq!(GLYPH_BYTES, glyph.len());
+    #[case('A', false)]
+    #[case('?', false)]
+    #[case('中', true)]
+    #[case('あ', true)]
+    #[case('한', true)]
+    fn wide_char_detection_matches_expected(#[case] ch: char, #[case] expected: bool) {
+        assert_eq!(expected, is_wide_char(ch));
     }
 }
