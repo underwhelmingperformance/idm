@@ -7,7 +7,8 @@ mod time_sync;
 
 pub use self::brightness::{Brightness, BrightnessError, BrightnessHandler};
 pub use self::frame_codec::{
-    FrameCodec, FrameCodecError, GifChunkFlag, GifHeaderFields, ShortFrame, TextHeaderFields,
+    DiyPrefixFields, FrameCodec, FrameCodecError, GifChunkFlag, GifHeaderFields,
+    OtaChunkHeaderFields, ShortFrame, TextHeaderFields,
 };
 pub use self::fullscreen_colour::{FullscreenColourHandler, Rgb};
 pub use self::power::{PowerHandler, ScreenPower};

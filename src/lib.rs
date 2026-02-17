@@ -20,10 +20,10 @@ pub use cli::{
 };
 pub use error::{FixtureError, InteractionError, ProtocolError};
 pub use handlers::{
-    Brightness, BrightnessError, BrightnessHandler, FrameCodec, FrameCodecError,
-    FullscreenColourHandler, GifChunkFlag, GifHeaderFields, PowerHandler, Rgb, ScreenPower,
-    ShortFrame, TextHeaderFields, TextOptions, TextUploadError, TextUploadHandler,
-    TextUploadRequest, TimeSyncHandler, UploadPacing, UploadReceipt,
+    Brightness, BrightnessError, BrightnessHandler, DiyPrefixFields, FrameCodec, FrameCodecError,
+    FullscreenColourHandler, GifChunkFlag, GifHeaderFields, OtaChunkHeaderFields, PowerHandler,
+    Rgb, ScreenPower, ShortFrame, TextHeaderFields, TextOptions, TextUploadError,
+    TextUploadHandler, TextUploadRequest, TimeSyncHandler, UploadPacing, UploadReceipt,
 };
 pub use hw::{
     AmbiguousShape, CharacteristicInfo, DeviceProfile, DeviceProfileResolver, DeviceRoutingProfile,

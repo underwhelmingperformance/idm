@@ -4,6 +4,10 @@ const SHORT_FRAME_HEADER_LEN: usize = 4;
 const SHORT_FRAME_MAX_PAYLOAD_LEN: usize = u16::MAX as usize - SHORT_FRAME_HEADER_LEN;
 const HEADER_LEN: u16 = 16;
 const HEADER_MAX_PAYLOAD_LEN: u16 = u16::MAX - HEADER_LEN;
+const DIY_PREFIX_LEN: u16 = 9;
+const DIY_PREFIX_MAX_PAYLOAD_LEN: u16 = u16::MAX - DIY_PREFIX_LEN;
+const OTA_CHUNK_HEADER_LEN: u16 = 13;
+const OTA_CHUNK_MAX_PAYLOAD_LEN: u16 = u16::MAX - OTA_CHUNK_HEADER_LEN;
 
 /// Errors returned by frame encoding and decoding.
 #[derive(Debug, Error, Clone, Eq, PartialEq)]
@@ -213,6 +217,138 @@ impl GifHeaderFields {
     }
 }
 
+/// Fields used when encoding a DIY 9-byte transfer prefix.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct DiyPrefixFields {
+    chunk_payload_len: u16,
+    chunk_flag: GifChunkFlag,
+    payload_len: u32,
+}
+
+impl DiyPrefixFields {
+    /// Creates DIY-prefix fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `chunk_payload_len` cannot fit in a 9-byte framed block.
+    ///
+    /// ```
+    /// use idm::{DiyPrefixFields, GifChunkFlag};
+    ///
+    /// let fields = DiyPrefixFields::new(4096, GifChunkFlag::First, 8192)?;
+    /// assert_eq!(4096, fields.chunk_payload_len());
+    /// # Ok::<(), idm::FrameCodecError>(())
+    /// ```
+    pub fn new(
+        chunk_payload_len: u16,
+        chunk_flag: GifChunkFlag,
+        payload_len: u32,
+    ) -> Result<Self, FrameCodecError> {
+        if chunk_payload_len > DIY_PREFIX_MAX_PAYLOAD_LEN {
+            return Err(FrameCodecError::HeaderPayloadTooLarge {
+                payload_len: chunk_payload_len,
+                max_payload_len: DIY_PREFIX_MAX_PAYLOAD_LEN,
+            });
+        }
+
+        Ok(Self {
+            chunk_payload_len,
+            chunk_flag,
+            payload_len,
+        })
+    }
+
+    /// Returns the payload byte count for this frame block.
+    ///
+    /// ```
+    /// use idm::{DiyPrefixFields, GifChunkFlag};
+    ///
+    /// let fields = DiyPrefixFields::new(1024, GifChunkFlag::Continuation, 4096)?;
+    /// assert_eq!(1024, fields.chunk_payload_len());
+    /// # Ok::<(), idm::FrameCodecError>(())
+    /// ```
+    #[must_use]
+    pub fn chunk_payload_len(&self) -> u16 {
+        self.chunk_payload_len
+    }
+}
+
+/// Fields used when encoding an OTA 13-byte chunk header.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct OtaChunkHeaderFields {
+    package_index: u8,
+    chunk_crc32: u32,
+    chunk_len: u32,
+}
+
+impl OtaChunkHeaderFields {
+    /// Creates OTA chunk-header fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `chunk_len` cannot fit in a 13-byte framed block.
+    ///
+    /// ```
+    /// use idm::OtaChunkHeaderFields;
+    ///
+    /// let fields = OtaChunkHeaderFields::new(2, 0x11223344, 4096)?;
+    /// assert_eq!(2, fields.package_index());
+    /// # Ok::<(), idm::FrameCodecError>(())
+    /// ```
+    pub fn new(
+        package_index: u8,
+        chunk_crc32: u32,
+        chunk_len: u32,
+    ) -> Result<Self, FrameCodecError> {
+        let chunk_payload_len = u16::try_from(chunk_len).map_err(|_overflow| {
+            FrameCodecError::HeaderPayloadTooLarge {
+                payload_len: u16::MAX,
+                max_payload_len: OTA_CHUNK_MAX_PAYLOAD_LEN,
+            }
+        })?;
+        if chunk_payload_len > OTA_CHUNK_MAX_PAYLOAD_LEN {
+            return Err(FrameCodecError::HeaderPayloadTooLarge {
+                payload_len: chunk_payload_len,
+                max_payload_len: OTA_CHUNK_MAX_PAYLOAD_LEN,
+            });
+        }
+
+        Ok(Self {
+            package_index,
+            chunk_crc32,
+            chunk_len,
+        })
+    }
+
+    /// Returns the OTA package index.
+    ///
+    /// ```
+    /// use idm::OtaChunkHeaderFields;
+    ///
+    /// let fields = OtaChunkHeaderFields::new(3, 0xAABBCCDD, 1024)?;
+    /// assert_eq!(3, fields.package_index());
+    /// # Ok::<(), idm::FrameCodecError>(())
+    /// ```
+    #[must_use]
+    pub fn package_index(&self) -> u8 {
+        self.package_index
+    }
+
+    /// Returns the current chunk length.
+    ///
+    /// ```
+    /// use idm::OtaChunkHeaderFields;
+    ///
+    /// let fields = OtaChunkHeaderFields::new(3, 0xAABBCCDD, 1024)?;
+    /// assert_eq!(1024, fields.chunk_len());
+    /// # Ok::<(), idm::FrameCodecError>(())
+    /// ```
+    #[must_use]
+    pub fn chunk_len(&self) -> u32 {
+        self.chunk_len
+    }
+}
+
 /// Encodes and decodes iDotMatrix protocol frames.
 pub struct FrameCodec;
 
@@ -351,6 +487,61 @@ impl FrameCodec {
         header[15] = 0x0D;
         header
     }
+
+    /// Encodes a 9-byte DIY upload prefix.
+    ///
+    /// ```
+    /// use idm::{DiyPrefixFields, FrameCodec, GifChunkFlag};
+    ///
+    /// let fields = DiyPrefixFields::new(0x1000, GifChunkFlag::Continuation, 0x0000_18B9)?;
+    /// let prefix = FrameCodec::encode_diy_prefix(fields);
+    /// assert_eq!(
+    ///     [0x09, 0x10, 0x00, 0x00, 0x02, 0xB9, 0x18, 0x00, 0x00],
+    ///     prefix
+    /// );
+    /// # Ok::<(), idm::FrameCodecError>(())
+    /// ```
+    #[must_use]
+    pub fn encode_diy_prefix(fields: DiyPrefixFields) -> [u8; 9] {
+        let mut prefix = [0u8; 9];
+        let block_len = DIY_PREFIX_LEN + fields.chunk_payload_len;
+
+        prefix[0..2].copy_from_slice(&block_len.to_le_bytes());
+        prefix[2] = 0x00;
+        prefix[3] = 0x00;
+        prefix[4] = fields.chunk_flag.as_protocol_byte();
+        prefix[5..9].copy_from_slice(&fields.payload_len.to_le_bytes());
+        prefix
+    }
+
+    /// Encodes a 13-byte OTA chunk header.
+    ///
+    /// ```
+    /// use idm::{FrameCodec, OtaChunkHeaderFields};
+    ///
+    /// let fields = OtaChunkHeaderFields::new(0x02, 0x1122_3344, 0x1000)?;
+    /// let header = FrameCodec::encode_ota_chunk_header(fields);
+    /// assert_eq!(
+    ///     [0x0D, 0x10, 0x01, 0xC0, 0x02, 0x44, 0x33, 0x22, 0x11, 0x00, 0x10, 0x00, 0x00],
+    ///     header
+    /// );
+    /// # Ok::<(), idm::FrameCodecError>(())
+    /// ```
+    #[must_use]
+    pub fn encode_ota_chunk_header(fields: OtaChunkHeaderFields) -> [u8; 13] {
+        let mut header = [0u8; 13];
+        let chunk_payload_len = u16::try_from(fields.chunk_len)
+            .expect("chunk_len is validated by OtaChunkHeaderFields::new");
+        let block_len = OTA_CHUNK_HEADER_LEN + chunk_payload_len;
+
+        header[0..2].copy_from_slice(&block_len.to_le_bytes());
+        header[2] = 0x01;
+        header[3] = 0xC0;
+        header[4] = fields.package_index;
+        header[5..9].copy_from_slice(&fields.chunk_crc32.to_le_bytes());
+        header[9..13].copy_from_slice(&fields.chunk_len.to_le_bytes());
+        header
+    }
 }
 
 #[cfg(test)]
@@ -447,6 +638,42 @@ mod tests {
                 0x00, 0x0D,
             ],
             header
+        );
+    }
+
+    #[test]
+    fn encode_diy_prefix_matches_expected_bytes() {
+        let fields = DiyPrefixFields::new(0x1000, GifChunkFlag::Continuation, 0x0000_18B9)
+            .expect("captured DIY values should construct");
+        let prefix = FrameCodec::encode_diy_prefix(fields);
+        assert_eq!(
+            [0x09, 0x10, 0x00, 0x00, 0x02, 0xB9, 0x18, 0x00, 0x00],
+            prefix
+        );
+    }
+
+    #[test]
+    fn encode_ota_chunk_header_matches_expected_bytes() {
+        let fields = OtaChunkHeaderFields::new(0x02, 0x1122_3344, 0x1000)
+            .expect("captured OTA values should construct");
+        let header = FrameCodec::encode_ota_chunk_header(fields);
+        assert_eq!(
+            [
+                0x0D, 0x10, 0x01, 0xC0, 0x02, 0x44, 0x33, 0x22, 0x11, 0x00, 0x10, 0x00, 0x00
+            ],
+            header
+        );
+    }
+
+    #[test]
+    fn ota_header_fields_reject_oversized_chunk_len() {
+        let result = OtaChunkHeaderFields::new(0x01, 0xDEAD_BEEF, u32::from(u16::MAX));
+        assert_matches!(
+            result,
+            Err(FrameCodecError::HeaderPayloadTooLarge {
+                payload_len: u16::MAX,
+                max_payload_len: OTA_CHUNK_MAX_PAYLOAD_LEN
+            })
         );
     }
 }

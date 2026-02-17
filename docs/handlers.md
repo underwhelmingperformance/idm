@@ -209,11 +209,8 @@ impl NotificationHandler {
 
 ## Frame Codec Handler
 
-Status: `TODO`  
+Status: `DONE`  
 Priority: `P0`  
-Comment: Reset from `DONE` on `2026-02-16`. Current `FrameCodec` covers short +
-text/gif headers only; DIY 9-byte prefixes and OTA 13-byte chunk headers are not
-implemented yet.
 
 Protocol references:
 
@@ -237,7 +234,8 @@ pub struct FrameCodec;
 impl FrameCodec {
     pub fn encode_short(command_id: u8, command_ns: u8, payload: &[u8]) -> Result<Vec<u8>, FrameCodecError>;
     pub fn decode_short(frame: &[u8]) -> Result<ShortFrame<'_>, FrameCodecError>;
-    pub fn encode_media_header(fields: MediaHeaderFields) -> [u8; 16];
+    pub fn encode_text_header(fields: TextHeaderFields) -> [u8; 16];
+    pub fn encode_gif_header(fields: GifHeaderFields) -> [u8; 16];
     pub fn encode_diy_prefix(fields: DiyPrefixFields) -> [u8; 9];
     pub fn encode_ota_chunk_header(fields: OtaChunkHeaderFields) -> [u8; 13];
 }
