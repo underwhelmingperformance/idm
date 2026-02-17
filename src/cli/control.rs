@@ -1,4 +1,5 @@
 use std::io;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
@@ -8,7 +9,8 @@ use tracing::instrument;
 use crate::hw::HardwareClient;
 use crate::{
     Brightness, BrightnessHandler, FullscreenColourHandler, PowerHandler, Rgb, ScreenPower,
-    SessionHandler, TextUploadHandler, TextUploadRequest, TimeSyncHandler,
+    SessionHandler, TextOptions, TextUploadHandler, TextUploadRequest, TimeSyncHandler,
+    UploadPacing,
 };
 
 /// Arguments for the `control` command.
@@ -193,7 +195,7 @@ impl SyncTimeArgs {
 /// Arguments for `control text`.
 #[derive(Debug, Args)]
 pub struct TextArgs {
-    /// Text content to render and upload.
+    /// Text content to render and upload using standard CLI defaults.
     text: String,
 }
 
@@ -284,7 +286,7 @@ where
         }
         ControlAction::Text(text_args) => {
             let receipt =
-                TextUploadHandler::upload(session, TextUploadRequest::new(text_args.text.clone()))
+                TextUploadHandler::upload(session, default_cli_text_request(&text_args.text))
                     .await?;
             writeln!(
                 out,
@@ -296,4 +298,45 @@ where
     }
 
     Ok(())
+}
+
+fn default_cli_text_request(text: &str) -> TextUploadRequest {
+    TextUploadRequest::new(text.to_string())
+        .with_options(TextOptions::new(
+            0x00,
+            0x20,
+            0x01,
+            Rgb::new(0xFF, 0xFF, 0xFF),
+            0x00,
+            Rgb::new(0x00, 0x00, 0x00),
+        ))
+        .with_pacing(UploadPacing::NotifyAck {
+            timeout: Duration::from_secs(5),
+        })
+}
+
+#[cfg(test)]
+mod tests {
+    use pretty_assertions::assert_eq;
+
+    use super::*;
+
+    #[test]
+    fn default_cli_text_request_uses_stable_defaults() {
+        let request = default_cli_text_request("Hello");
+        let expected = TextUploadRequest::new("Hello")
+            .with_options(TextOptions::new(
+                0x00,
+                0x20,
+                0x01,
+                Rgb::new(0xFF, 0xFF, 0xFF),
+                0x00,
+                Rgb::new(0x00, 0x00, 0x00),
+            ))
+            .with_pacing(UploadPacing::NotifyAck {
+                timeout: Duration::from_secs(5),
+            });
+
+        assert_eq!(expected, request);
+    }
 }
