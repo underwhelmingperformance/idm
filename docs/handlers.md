@@ -158,12 +158,8 @@ impl DeviceProfileResolver {
 
 ## Notification Handler
 
-Status: `TODO`  
+Status: `DONE`  
 Priority: `P0`  
-Comment: Reset from `DONE` on `2026-02-16`. Current `src/notification.rs`
-decoder only recognises a minimal upload ACK subset and does not implement
-family-specific decode paths (text/gif/image/diy/timer/schedule/OTA),
-state-query responses, or profile-aware notify endpoint handling.
 
 Protocol references:
 
@@ -191,8 +187,6 @@ pub enum TransferFamily {
     Diy,
     Timer,
     Ota,
-    Schedule,
-    Unknown,
 }
 
 pub enum NotifyEvent {
@@ -201,6 +195,8 @@ pub enum NotifyEvent {
     Error(TransferFamily, u8),
     ScheduleSetup(u8),
     ScheduleMasterSwitch(u8),
+    LedInfo(LedInfoResponse),
+    ScreenLightTimeout(u8),
     Unknown(Vec<u8>),
 }
 

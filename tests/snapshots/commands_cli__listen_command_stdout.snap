@@ -19,7 +19,7 @@ Listen session:
 │ initial_read │ DE AD BE EF                                                        │
 │ listening_on │ 0000fa03-0000-1000-8000-00805f9b34fb (iDotMatrix read/notify data) │
 ╰──────────────┴────────────────────────────────────────────────────────────────────╯
-[0001] (chunk_ack) 05 00 01 00 01
-[0002] (upload_complete) 05 00 01 00 03
+[0001] (next_package:gif) 05 00 01 00 01
+[0002] (finished:gif) 05 00 01 00 03
 
 Stopped: reached max notifications (2) - received 2 notification(s)

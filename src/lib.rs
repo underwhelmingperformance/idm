@@ -32,6 +32,6 @@ pub use hw::{
     ModelResolutionConfig, NotificationRunSummary, PanelSize, ScanIdentity, ScanModelHandler,
     ServiceInfo, SessionMetadata, TextPath, WriteMode,
 };
-pub use notification::{NotificationDecodeError, NotificationHandler, NotifyEvent};
+pub use notification::{NotificationDecodeError, NotificationHandler, NotifyEvent, TransferFamily};
 pub use protocol::EndpointId;
 pub use terminal::TerminalClient;

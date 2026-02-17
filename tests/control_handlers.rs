@@ -64,7 +64,7 @@ async fn text_upload_handler_writes_expected_payload_size() -> anyhow::Result<()
 async fn text_upload_handler_supports_notify_ack_pacing() -> anyhow::Result<()> {
     let fake_args = idm::FakeArgs::builder()
         .scan_fixture("hci0|AA:BB:CC|IDM-Clock|-43")?
-        .notifications("0500010001")?
+        .notifications("0500030001")?
         .build();
     let client = idm::fake_hardware_client(fake_args);
     let session = client.connect_first_device("IDM-").await?;

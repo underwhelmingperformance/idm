@@ -7,7 +7,7 @@ use tracing::instrument;
 use crate::hw::{HardwareClient, ListenSummary};
 use crate::protocol::EndpointId;
 use crate::terminal::TerminalClient;
-use crate::{NotificationHandler, NotifyEvent};
+use crate::{NotificationHandler, NotifyEvent, TransferFamily};
 
 use super::ui::{ListenNotificationView, ListenReadyView, ListenSummaryView, Painter};
 
@@ -95,8 +95,27 @@ where
                 return;
             }
             let event_label = match NotificationHandler::decode(payload) {
-                Ok(NotifyEvent::ChunkAck) => Some("chunk_ack".to_string()),
-                Ok(NotifyEvent::UploadComplete) => Some("upload_complete".to_string()),
+                Ok(NotifyEvent::NextPackage(family)) => {
+                    Some(format!("next_package:{}", family_label(family)))
+                }
+                Ok(NotifyEvent::Finished(family)) => {
+                    Some(format!("finished:{}", family_label(family)))
+                }
+                Ok(NotifyEvent::Error(family, status)) => {
+                    Some(format!("error:{}:{status:#04X}", family_label(family)))
+                }
+                Ok(NotifyEvent::ScheduleSetup(status)) => {
+                    Some(format!("schedule_setup:{status:#04X}"))
+                }
+                Ok(NotifyEvent::ScheduleMasterSwitch(status)) => {
+                    Some(format!("schedule_master_switch:{status:#04X}"))
+                }
+                Ok(NotifyEvent::LedInfo(response)) => {
+                    Some(format!("led_info:screen_type={}", response.screen_type))
+                }
+                Ok(NotifyEvent::ScreenLightTimeout(value)) => {
+                    Some(format!("screen_light_timeout:{value}"))
+                }
                 Ok(NotifyEvent::Unknown(_unknown_payload)) => Some("unknown".to_string()),
                 Err(error) => Some(format!("decode_error:{error}")),
             };
@@ -126,4 +145,15 @@ where
     writeln!(out, "{}", ListenSummaryView::new(&summary, &painter))?;
 
     Ok(())
+}
+
+fn family_label(family: TransferFamily) -> &'static str {
+    match family {
+        TransferFamily::Text => "text",
+        TransferFamily::Gif => "gif",
+        TransferFamily::Image => "image",
+        TransferFamily::Diy => "diy",
+        TransferFamily::Timer => "timer",
+        TransferFamily::Ota => "ota",
+    }
 }

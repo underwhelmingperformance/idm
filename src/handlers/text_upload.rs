@@ -9,7 +9,9 @@ use tracing::instrument;
 use crate::error::ProtocolError;
 use crate::hw::{DeviceSession, WriteMode};
 use crate::protocol::EndpointId;
-use crate::{FrameCodec, NotificationDecodeError, NotificationHandler, NotifyEvent, Rgb};
+use crate::{
+    FrameCodec, NotificationDecodeError, NotificationHandler, NotifyEvent, Rgb, TransferFamily,
+};
 
 use super::FrameCodecError;
 
@@ -380,8 +382,9 @@ async fn wait_for_notify_ack(
             };
             let event = event_result?;
             match event {
-                NotifyEvent::ChunkAck | NotifyEvent::UploadComplete => Ok(()),
-                NotifyEvent::Unknown(_) => Err(TextUploadError::UnexpectedNotifyEvent.into()),
+                NotifyEvent::NextPackage(TransferFamily::Text)
+                | NotifyEvent::Finished(TransferFamily::Text) => Ok(()),
+                _other => Err(TextUploadError::UnexpectedNotifyEvent.into()),
             }
         }
     }
