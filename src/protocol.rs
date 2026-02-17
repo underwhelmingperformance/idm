@@ -4,6 +4,15 @@ use std::sync::LazyLock;
 use strum::IntoEnumIterator;
 use strum_macros::{Display, EnumIter};
 
+/// ATT MTU requested during session setup.
+pub(crate) const REQUESTED_ATT_MTU: usize = 512;
+/// Threshold that indicates MTU-ready transfer behaviour.
+pub(crate) const MTU_READY_THRESHOLD: usize = 100;
+/// Transport fragment size used when MTU is negotiated and ready.
+pub(crate) const TRANSPORT_CHUNK_MTU_READY: usize = 509;
+/// Conservative transport fragment size used when MTU-ready state is unknown.
+pub(crate) const TRANSPORT_CHUNK_FALLBACK: usize = 18;
+
 /// Known iDotMatrix protocol endpoints.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, EnumIter, Display)]
 pub enum EndpointId {

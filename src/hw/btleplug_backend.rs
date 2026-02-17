@@ -26,7 +26,7 @@ use super::profile::{resolve_device_profile, resolve_device_routing_profile};
 use super::scan_model::{ScanIdentity, ScanModelHandler};
 use super::session::negotiate_session_endpoints;
 use crate::error::InteractionError;
-use crate::protocol::EndpointId;
+use crate::protocol::{self, EndpointId};
 
 const LED_INFO_QUERY_TIMEOUT_MS: u64 = 1_000;
 const GET_LED_INFO_QUERY: [u8; 4] = [0x04, 0x00, 0x01, 0x80];
@@ -252,7 +252,9 @@ impl BtleplugBackend {
             &self.model_resolution,
         )?;
 
-        let write_without_response_limit = None;
+        let write_without_response_limit = characteristics_by_endpoint
+            .get(&EndpointId::WriteCharacteristic)
+            .and_then(|characteristic| negotiated_transport_write_limit(characteristic.properties));
         let device_profile = resolve_device_profile(
             &connected.device,
             &services,
@@ -745,6 +747,23 @@ fn write_types_for_characteristic(properties: CharPropFlags) -> Vec<WriteType> {
     write_types
 }
 
+fn negotiated_transport_write_limit(properties: CharPropFlags) -> Option<usize> {
+    if properties.contains(CharPropFlags::WRITE_WITHOUT_RESPONSE) {
+        let write_limit = if protocol::REQUESTED_ATT_MTU >= protocol::MTU_READY_THRESHOLD {
+            protocol::TRANSPORT_CHUNK_MTU_READY
+        } else {
+            protocol::TRANSPORT_CHUNK_FALLBACK
+        };
+        return Some(write_limit);
+    }
+
+    if properties.contains(CharPropFlags::WRITE) {
+        return Some(protocol::TRANSPORT_CHUNK_FALLBACK);
+    }
+
+    None
+}
+
 fn matches_name_prefix(local_name: Option<&str>, name_prefix: &str) -> bool {
     if name_prefix.is_empty() {
         return true;
@@ -1057,6 +1076,25 @@ mod tests {
         #[case] expected: Vec<WriteType>,
     ) {
         let resolved = write_types_for_characteristic(properties);
+        assert_eq!(expected, resolved);
+    }
+
+    #[rstest]
+    #[case(
+        CharPropFlags::WRITE_WITHOUT_RESPONSE,
+        Some(protocol::TRANSPORT_CHUNK_MTU_READY)
+    )]
+    #[case(CharPropFlags::WRITE, Some(protocol::TRANSPORT_CHUNK_FALLBACK))]
+    #[case(
+        CharPropFlags::WRITE_WITHOUT_RESPONSE | CharPropFlags::WRITE,
+        Some(protocol::TRANSPORT_CHUNK_MTU_READY)
+    )]
+    #[case(CharPropFlags::READ, None)]
+    fn negotiated_transport_write_limit_resolves_expected_values(
+        #[case] properties: CharPropFlags,
+        #[case] expected: Option<usize>,
+    ) {
+        let resolved = negotiated_transport_write_limit(properties);
         assert_eq!(expected, resolved);
     }
 

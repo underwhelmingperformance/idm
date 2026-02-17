@@ -20,7 +20,7 @@ async fn fake_session_connect_populates_report_metadata() -> anyhow::Result<()> 
         report.session_metadata().gatt_profile()
     );
     assert_eq!(
-        Some(514),
+        Some(509),
         report.session_metadata().write_without_response_limit()
     );
     assert_eq!(
@@ -41,7 +41,7 @@ async fn fake_session_connect_populates_report_metadata() -> anyhow::Result<()> 
     );
     assert_eq!(None, report.session_metadata().device_routing_profile());
     assert_eq!(
-        514,
+        509,
         report
             .session_metadata()
             .device_profile()

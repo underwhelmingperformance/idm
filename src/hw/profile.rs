@@ -4,10 +4,9 @@ use super::device_profile_resolver::{
     DeviceProfileResolver, DeviceRoutingProfile, LedInfoResponse,
 };
 use super::model::{FoundDevice, ServiceInfo};
+use crate::protocol;
 
 const ALTERNATE_VENDOR_SERVICE_UUID: &str = "0000ae00-0000-1000-8000-00805f9b34fb";
-const DEFAULT_WRITE_WITHOUT_RESPONSE_FALLBACK: usize = 512;
-const SIZE_64_WRITE_WITHOUT_RESPONSE_FALLBACK: usize = 514;
 const UNUSABLE_WRITE_WITHOUT_RESPONSE_LIMIT: usize = 20;
 
 /// Logical iDotMatrix panel size.
@@ -191,8 +190,7 @@ pub(crate) fn resolve_device_profile(
 
     let write_without_response_fallback = match write_without_response_limit {
         Some(limit) if limit > UNUSABLE_WRITE_WITHOUT_RESPONSE_LIMIT => limit,
-        _ if matches!(panel_size, PanelSize::Size64x64) => SIZE_64_WRITE_WITHOUT_RESPONSE_FALLBACK,
-        _ => DEFAULT_WRITE_WITHOUT_RESPONSE_FALLBACK,
+        _ => protocol::TRANSPORT_CHUNK_FALLBACK,
     };
 
     DeviceProfile::new(
@@ -313,7 +311,7 @@ mod tests {
         assert_eq!(PanelSize::Size64x64, resolved.panel_size());
         assert_eq!(ImageUploadMode::RawRgb, resolved.image_upload_mode());
         assert_eq!(
-            SIZE_64_WRITE_WITHOUT_RESPONSE_FALLBACK,
+            protocol::TRANSPORT_CHUNK_FALLBACK,
             resolved.write_without_response_fallback()
         );
     }
@@ -330,7 +328,7 @@ mod tests {
         assert_eq!(PanelSize::Unknown, resolved.panel_size());
         assert_eq!(ImageUploadMode::PngFile, resolved.image_upload_mode());
         assert_eq!(
-            DEFAULT_WRITE_WITHOUT_RESPONSE_FALLBACK,
+            protocol::TRANSPORT_CHUNK_FALLBACK,
             resolved.write_without_response_fallback()
         );
     }
@@ -345,7 +343,7 @@ mod tests {
         );
 
         assert_eq!(
-            SIZE_64_WRITE_WITHOUT_RESPONSE_FALLBACK,
+            protocol::TRANSPORT_CHUNK_FALLBACK,
             resolved.write_without_response_fallback()
         );
     }

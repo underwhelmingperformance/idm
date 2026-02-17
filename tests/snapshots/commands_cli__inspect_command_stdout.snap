@@ -18,7 +18,7 @@ Session metadata:
 ├───────────────────────────────────────┼──────────────────────────────────────┤
 │ Required endpoints verified           │ yes                                  │
 │ GATT profile                          │ fa_fa02                              │
-│ Write-without-response limit          │ 514 bytes                            │
+│ Write-without-response limit          │ 509 bytes                            │
 │ Discovered services                   │ 1                                    │
 │ Discovered characteristics            │ 2                                    │
 │ Write characteristic properties       │ write                                │
@@ -31,7 +31,7 @@ Session metadata:
 │ Profile joint mode                    │ <none>                               │
 │ Profile image upload mode             │ png_file                             │
 │ Profile GIF header                    │ timed                                │
-│ Profile write chunk fallback          │ 514 bytes                            │
+│ Profile write chunk fallback          │ 509 bytes                            │
 ╰───────────────────────────────────────┴──────────────────────────────────────╯
 
 Expected iDotMatrix endpoints:

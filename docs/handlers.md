@@ -6,12 +6,8 @@ implement, in priority order, with API shape and behaviour expectations.
 
 ## Session Handler
 
-Status: `PARTIAL`  
+Status: `DONE`  
 Priority: `P0`  
-Comment: Endpoint/profile negotiation is now implemented for FA and FEE9
-service families (including runtime read/notify selection and surfaced session
-metadata). Discovery now validates manufacturer AD payloads (`TR 00 70/71`) and
-still supports optional local-name-prefix filtering.
 
 Protocol references:
 

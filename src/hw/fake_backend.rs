@@ -17,14 +17,15 @@ use super::profile::{resolve_device_profile, resolve_device_routing_profile};
 use super::scan_model::ScanModelHandler;
 use super::session::{FA_SERVICE_UUID, FA_WRITE_UUID, negotiate_session_endpoints};
 use crate::error::{FixtureError, InteractionError};
-use crate::protocol::EndpointId;
+use crate::protocol::{self, EndpointId};
 
 const DEFAULT_INITIAL_READ: [u8; 5] = [0x05, 0x00, 0x01, 0x00, 0x01];
 const DEFAULT_NOTIFICATIONS: [[u8; 5]; 2] = [
     [0x05, 0x00, 0x01, 0x00, 0x01],
     [0x05, 0x00, 0x01, 0x00, 0x03],
 ];
-const DEFAULT_WRITE_WITHOUT_RESPONSE_LIMIT: Option<usize> = Some(514);
+const DEFAULT_WRITE_WITHOUT_RESPONSE_LIMIT: Option<usize> =
+    Some(protocol::TRANSPORT_CHUNK_MTU_READY);
 
 /// Parsed fake scan fixture records.
 #[derive(Debug, Clone, derive_more::Into)]
