@@ -96,15 +96,15 @@ impl<'a> ListenNotificationView<'a> {
 impl Display for ListenNotificationView<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let index_label = self.painter.muted(format!("[{:04}]", self.index));
-        let event_label = self
-            .event_label
-            .as_ref()
-            .map(|label| self.painter.muted(format!("({label}) ")))
-            .unwrap_or_default();
+        let event_label = self.event_label.as_deref().unwrap_or("Notification");
+        let raw_payload = self
+            .painter
+            .muted(format!("raw={}", format_hex(self.payload)));
         write!(
             f,
-            "{index_label} {event_label}{}",
-            self.painter.value(format_hex(self.payload))
+            "{index_label} {} {}",
+            self.painter.value(event_label),
+            raw_payload
         )
     }
 }
@@ -184,8 +184,12 @@ mod tests {
     fn notification_formats_with_event_label() {
         let painter = Painter::new(false);
         let payload = [0x05, 0x00, 0x01];
-        let view =
-            ListenNotificationView::new(42, &payload, Some("chunk_ack".to_string()), &painter);
+        let view = ListenNotificationView::new(
+            42,
+            &payload,
+            Some("Text next package".to_string()),
+            &painter,
+        );
         assert_snapshot!("notification_line_with_event", view.to_string());
     }
 

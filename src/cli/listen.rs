@@ -96,28 +96,35 @@ where
             }
             let event_label = match NotificationHandler::decode(payload) {
                 Ok(NotifyEvent::NextPackage(family)) => {
-                    Some(format!("next_package:{}", family_label(family)))
+                    Some(format!("{} next package", family_label(family)))
                 }
                 Ok(NotifyEvent::Finished(family)) => {
-                    Some(format!("finished:{}", family_label(family)))
+                    Some(format!("{} finished", family_label(family)))
                 }
                 Ok(NotifyEvent::Error(family, status)) => {
-                    Some(format!("error:{}:{status:#04X}", family_label(family)))
+                    Some(format!("{} error ({status:#04X})", family_label(family)))
                 }
-                Ok(NotifyEvent::ScheduleSetup(status)) => {
-                    Some(format!("schedule_setup:{status:#04X}"))
-                }
+                Ok(NotifyEvent::ScheduleSetup(status)) => Some(schedule_setup_message(status)),
                 Ok(NotifyEvent::ScheduleMasterSwitch(status)) => {
-                    Some(format!("schedule_master_switch:{status:#04X}"))
+                    Some(schedule_master_switch_message(status))
                 }
-                Ok(NotifyEvent::LedInfo(response)) => {
-                    Some(format!("led_info:screen_type={}", response.screen_type))
-                }
+                Ok(NotifyEvent::LedInfo(response)) => Some(format!(
+                    "LED info: screen_type={} mcu={}.{} status={:#04X} password={}",
+                    response.screen_type,
+                    response.mcu_major_version,
+                    response.mcu_minor_version,
+                    response.status,
+                    if response.password_enabled {
+                        "on"
+                    } else {
+                        "off"
+                    }
+                )),
                 Ok(NotifyEvent::ScreenLightTimeout(value)) => {
-                    Some(format!("screen_light_timeout:{value}"))
+                    Some(format!("Screen-light timeout: {value}"))
                 }
-                Ok(NotifyEvent::Unknown(_unknown_payload)) => Some("unknown".to_string()),
-                Err(error) => Some(format!("decode_error:{error}")),
+                Ok(NotifyEvent::Unknown(_unknown_payload)) => Some("Unknown event".to_string()),
+                Err(error) => Some(format!("Decode error: {error}")),
             };
             let view = ListenNotificationView::new(index, payload, event_label, &painter);
             if let Err(error) = writeln!(out, "{view}") {
@@ -149,11 +156,26 @@ where
 
 fn family_label(family: TransferFamily) -> &'static str {
     match family {
-        TransferFamily::Text => "text",
-        TransferFamily::Gif => "gif",
-        TransferFamily::Image => "image",
-        TransferFamily::Diy => "diy",
-        TransferFamily::Timer => "timer",
-        TransferFamily::Ota => "ota",
+        TransferFamily::Text => "Text",
+        TransferFamily::Gif => "GIF",
+        TransferFamily::Image => "Image",
+        TransferFamily::Diy => "DIY",
+        TransferFamily::Timer => "Timer",
+        TransferFamily::Ota => "OTA",
+    }
+}
+
+fn schedule_setup_message(status: u8) -> String {
+    match status {
+        0x01 => "Schedule setup: success".to_string(),
+        0x03 => "Schedule setup: continue".to_string(),
+        other => format!("Schedule setup: failed ({other:#04X})"),
+    }
+}
+
+fn schedule_master_switch_message(status: u8) -> String {
+    match status {
+        0x01 => "Schedule master switch: success".to_string(),
+        other => format!("Schedule master switch: failed ({other:#04X})"),
     }
 }
