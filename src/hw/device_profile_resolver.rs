@@ -25,7 +25,7 @@ pub enum TextPath {
 
 /// Device-routing decisions derived from scan identity and optional LED-info query data.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub struct DeviceRoutingProfile {
+pub(crate) struct DeviceRoutingProfile {
     /// Resolved LED type (screen type), when known.
     pub led_type: Option<u8>,
     /// Resolved panel size in pixels (`width`, `height`), when known.
@@ -78,12 +78,12 @@ impl LedInfoResponse {
 }
 
 /// Resolves routing decisions from discovery identity and LED-info response data.
-pub struct DeviceProfileResolver;
+pub(crate) struct DeviceProfileResolver;
 
 impl DeviceProfileResolver {
     /// Resolves the routing profile for one device.
     ///
-    /// ```
+    /// ```ignore
     /// let identity = idm::ScanIdentity {
     ///     cid: 1,
     ///     pid: 5,
@@ -98,7 +98,7 @@ impl DeviceProfileResolver {
     /// assert_eq!(Some(idm::TextPath::Path6464), resolved.text_path);
     /// ```
     #[must_use]
-    pub fn resolve(
+    pub(crate) fn resolve(
         identity: &ScanIdentity,
         led_info: Option<LedInfoResponse>,
     ) -> DeviceRoutingProfile {
@@ -107,7 +107,7 @@ impl DeviceProfileResolver {
 
     /// Resolves the routing profile with an explicit selected LED type hint.
     #[must_use]
-    pub fn resolve_with_selected_led_type(
+    pub(crate) fn resolve_with_selected_led_type(
         identity: &ScanIdentity,
         led_info: Option<LedInfoResponse>,
         selected_led_type: Option<u8>,

@@ -12,9 +12,8 @@ mod scan_capabilities;
 mod scan_model;
 mod session;
 
-pub use self::device_profile_resolver::{
-    DeviceProfileResolver, DeviceRoutingProfile, LedInfoResponse, TextPath,
-};
+pub(crate) use self::device_profile_resolver::{DeviceProfileResolver, DeviceRoutingProfile};
+pub use self::device_profile_resolver::{LedInfoResponse, TextPath};
 pub(crate) use self::fake_backend::{
     FakeBackendConfig, HexPayload, NotificationPayloads, ScanFixture,
 };
@@ -27,6 +26,8 @@ pub use self::model::{
     ListenSummary, NotificationRunSummary, ServiceInfo, SessionMetadata,
 };
 pub use self::model_overrides::ModelResolutionConfig;
-pub use self::profile::{DeviceProfile, GifHeaderProfile, ImageUploadMode, PanelSize};
+pub use self::profile::{
+    DeviceProfile, GifHeaderProfile, ImageUploadMode, PanelDimensions, PanelSize,
+};
 pub use self::scan_model::{AmbiguousShape, ModelProfile, ScanIdentity, ScanModelHandler};
 pub use self::session::GattProfile;

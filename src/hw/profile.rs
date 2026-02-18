@@ -1,7 +1,8 @@
 use derive_more::Display;
+use std::fmt::{self, Formatter};
 
 use super::device_profile_resolver::{
-    DeviceProfileResolver, DeviceRoutingProfile, LedInfoResponse,
+    DeviceProfileResolver, DeviceRoutingProfile, LedInfoResponse, TextPath,
 };
 use super::model::{FoundDevice, ServiceInfo};
 use crate::protocol;
@@ -9,12 +10,86 @@ use crate::protocol;
 const ALTERNATE_VENDOR_SERVICE_UUID: &str = "0000ae00-0000-1000-8000-00805f9b34fb";
 const UNUSABLE_WRITE_WITHOUT_RESPONSE_LIMIT: usize = 20;
 
+/// Concrete panel dimensions in pixels.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub struct PanelDimensions {
+    width: u16,
+    height: u16,
+}
+
+impl PanelDimensions {
+    /// Creates panel dimensions when both values are non-zero.
+    ///
+    /// ```
+    /// use idm::PanelDimensions;
+    ///
+    /// let dimensions =
+    ///     PanelDimensions::new(64, 64).expect("64x64 should be valid dimensions");
+    /// assert_eq!(64, dimensions.width());
+    /// assert_eq!(64, dimensions.height());
+    /// ```
+    #[must_use]
+    pub const fn new(width: u16, height: u16) -> Option<Self> {
+        if width == 0 || height == 0 {
+            return None;
+        }
+
+        Some(Self { width, height })
+    }
+
+    /// Returns panel width in pixels.
+    ///
+    /// ```
+    /// use idm::PanelDimensions;
+    ///
+    /// let dimensions =
+    ///     PanelDimensions::new(8, 32).expect("8x32 should be valid dimensions");
+    /// assert_eq!(8, dimensions.width());
+    /// ```
+    #[must_use]
+    pub const fn width(self) -> u16 {
+        self.width
+    }
+
+    /// Returns panel height in pixels.
+    ///
+    /// ```
+    /// use idm::PanelDimensions;
+    ///
+    /// let dimensions =
+    ///     PanelDimensions::new(8, 32).expect("8x32 should be valid dimensions");
+    /// assert_eq!(32, dimensions.height());
+    /// ```
+    #[must_use]
+    pub const fn height(self) -> u16 {
+        self.height
+    }
+}
+
+impl fmt::Display for PanelDimensions {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "{}x{}", self.width, self.height)
+    }
+}
+
 /// Logical iDotMatrix panel size.
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Display)]
 pub enum PanelSize {
+    /// A `8x32` panel.
+    #[display("8x32")]
+    Size8x32,
     /// A `16x16` panel.
     #[display("16x16")]
     Size16x16,
+    /// A `16x32` panel.
+    #[display("16x32")]
+    Size16x32,
+    /// A `16x64` panel.
+    #[display("16x64")]
+    Size16x64,
+    /// A `24x48` panel.
+    #[display("24x48")]
+    Size24x48,
     /// A `32x32` panel.
     #[display("32x32")]
     Size32x32,
@@ -51,7 +126,11 @@ pub enum ImageUploadMode {
 /// Resolved device behaviour profile.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct DeviceProfile {
-    panel_size: PanelSize,
+    panel_dimensions: Option<PanelDimensions>,
+    routing_profile_present: bool,
+    led_type: Option<u8>,
+    text_path: Option<TextPath>,
+    joint_mode: Option<u8>,
     gif_header_profile: GifHeaderProfile,
     image_upload_mode: ImageUploadMode,
     write_without_response_fallback: usize,
@@ -61,10 +140,10 @@ impl DeviceProfile {
     /// Creates a concrete device profile.
     ///
     /// ```
-    /// use idm::{DeviceProfile, GifHeaderProfile, ImageUploadMode, PanelSize};
+    /// use idm::{DeviceProfile, GifHeaderProfile, ImageUploadMode, PanelDimensions};
     ///
     /// let profile = DeviceProfile::new(
-    ///     PanelSize::Size64x64,
+    ///     PanelDimensions::new(64, 64),
     ///     GifHeaderProfile::Timed,
     ///     ImageUploadMode::RawRgb,
     ///     514,
@@ -73,26 +152,64 @@ impl DeviceProfile {
     /// ```
     #[must_use]
     pub fn new(
-        panel_size: PanelSize,
+        panel_dimensions: Option<PanelDimensions>,
         gif_header_profile: GifHeaderProfile,
         image_upload_mode: ImageUploadMode,
         write_without_response_fallback: usize,
     ) -> Self {
         Self {
-            panel_size,
+            panel_dimensions,
+            routing_profile_present: false,
+            led_type: None,
+            text_path: None,
+            joint_mode: None,
             gif_header_profile,
             image_upload_mode,
             write_without_response_fallback,
         }
     }
 
-    /// Returns the resolved panel size.
+    pub(crate) fn with_routing_profile(
+        mut self,
+        routing_profile: Option<DeviceRoutingProfile>,
+    ) -> Self {
+        self.routing_profile_present = routing_profile.is_some();
+        self.led_type = routing_profile.and_then(|profile| profile.led_type);
+        self.text_path = routing_profile.and_then(|profile| profile.text_path);
+        self.joint_mode = routing_profile.and_then(|profile| profile.joint_mode);
+        self
+    }
+
+    #[must_use]
+    pub(crate) fn routing_profile_present(&self) -> bool {
+        self.routing_profile_present
+    }
+
+    /// Returns the resolved panel dimensions, when known.
     ///
     /// ```
-    /// use idm::{DeviceProfile, GifHeaderProfile, ImageUploadMode, PanelSize};
+    /// use idm::{DeviceProfile, GifHeaderProfile, ImageUploadMode, PanelDimensions};
     ///
     /// let profile = DeviceProfile::new(
-    ///     PanelSize::Size32x32,
+    ///     PanelDimensions::new(32, 32),
+    ///     GifHeaderProfile::Timed,
+    ///     ImageUploadMode::PngFile,
+    ///     512,
+    /// );
+    /// assert_eq!(PanelDimensions::new(32, 32), profile.panel_dimensions());
+    /// ```
+    #[must_use]
+    pub fn panel_dimensions(&self) -> Option<PanelDimensions> {
+        self.panel_dimensions
+    }
+
+    /// Returns a coarse logical panel size classification.
+    ///
+    /// ```
+    /// use idm::{DeviceProfile, GifHeaderProfile, ImageUploadMode, PanelDimensions, PanelSize};
+    ///
+    /// let profile = DeviceProfile::new(
+    ///     PanelDimensions::new(32, 32),
     ///     GifHeaderProfile::Timed,
     ///     ImageUploadMode::PngFile,
     ///     512,
@@ -101,16 +218,59 @@ impl DeviceProfile {
     /// ```
     #[must_use]
     pub fn panel_size(&self) -> PanelSize {
-        self.panel_size
+        self.panel_dimensions
+            .map_or(PanelSize::Unknown, PanelSize::from)
+    }
+
+    /// Returns the resolved LED type, when known.
+    ///
+    /// ```
+    /// use idm::{DeviceProfile, GifHeaderProfile, ImageUploadMode};
+    ///
+    /// let profile =
+    ///     DeviceProfile::new(None, GifHeaderProfile::Timed, ImageUploadMode::PngFile, 512);
+    /// assert_eq!(None, profile.led_type());
+    /// ```
+    #[must_use]
+    pub fn led_type(&self) -> Option<u8> {
+        self.led_type
+    }
+
+    /// Returns the resolved text path, when known.
+    ///
+    /// ```
+    /// use idm::{DeviceProfile, GifHeaderProfile, ImageUploadMode};
+    ///
+    /// let profile =
+    ///     DeviceProfile::new(None, GifHeaderProfile::Timed, ImageUploadMode::PngFile, 512);
+    /// assert_eq!(None, profile.text_path());
+    /// ```
+    #[must_use]
+    pub fn text_path(&self) -> Option<TextPath> {
+        self.text_path
+    }
+
+    /// Returns the resolved joint mode, when required by ambiguous shapes.
+    ///
+    /// ```
+    /// use idm::{DeviceProfile, GifHeaderProfile, ImageUploadMode};
+    ///
+    /// let profile =
+    ///     DeviceProfile::new(None, GifHeaderProfile::Timed, ImageUploadMode::PngFile, 512);
+    /// assert_eq!(None, profile.joint_mode());
+    /// ```
+    #[must_use]
+    pub fn joint_mode(&self) -> Option<u8> {
+        self.joint_mode
     }
 
     /// Returns the resolved GIF header profile.
     ///
     /// ```
-    /// use idm::{DeviceProfile, GifHeaderProfile, ImageUploadMode, PanelSize};
+    /// use idm::{DeviceProfile, GifHeaderProfile, ImageUploadMode};
     ///
     /// let profile = DeviceProfile::new(
-    ///     PanelSize::Unknown,
+    ///     None,
     ///     GifHeaderProfile::NoTimeSignature,
     ///     ImageUploadMode::PngFile,
     ///     512,
@@ -125,10 +285,10 @@ impl DeviceProfile {
     /// Returns the resolved image upload mode.
     ///
     /// ```
-    /// use idm::{DeviceProfile, GifHeaderProfile, ImageUploadMode, PanelSize};
+    /// use idm::{DeviceProfile, GifHeaderProfile, ImageUploadMode};
     ///
     /// let profile = DeviceProfile::new(
-    ///     PanelSize::Unknown,
+    ///     None,
     ///     GifHeaderProfile::Timed,
     ///     ImageUploadMode::RawRgb,
     ///     514,
@@ -143,10 +303,10 @@ impl DeviceProfile {
     /// Returns the write-without-response fallback chunk size.
     ///
     /// ```
-    /// use idm::{DeviceProfile, GifHeaderProfile, ImageUploadMode, PanelSize};
+    /// use idm::{DeviceProfile, GifHeaderProfile, ImageUploadMode};
     ///
     /// let profile = DeviceProfile::new(
-    ///     PanelSize::Unknown,
+    ///     None,
     ///     GifHeaderProfile::Timed,
     ///     ImageUploadMode::PngFile,
     ///     512,
@@ -159,22 +319,37 @@ impl DeviceProfile {
     }
 }
 
+impl From<PanelDimensions> for PanelSize {
+    fn from(value: PanelDimensions) -> Self {
+        match (value.width(), value.height()) {
+            (8, 32) => Self::Size8x32,
+            (16, 16) => Self::Size16x16,
+            (16, 32) => Self::Size16x32,
+            (16, 64) => Self::Size16x64,
+            (24, 48) => Self::Size24x48,
+            (32, 32) => Self::Size32x32,
+            (64, 64) => Self::Size64x64,
+            _ => Self::Unknown,
+        }
+    }
+}
+
 pub(crate) fn resolve_device_profile(
     device: &FoundDevice,
     services: &[ServiceInfo],
     write_without_response_limit: Option<usize>,
     routing_profile: Option<DeviceRoutingProfile>,
 ) -> DeviceProfile {
-    let panel_size = routing_profile
+    let panel_dimensions = routing_profile
         .and_then(|profile| profile.panel_size)
-        .and_then(panel_size_from_dimensions)
+        .and_then(panel_dimensions_from_tuple)
         .or_else(|| {
             device
                 .model_profile()
                 .and_then(|model_profile| model_profile.panel_size)
-                .and_then(panel_size_from_dimensions)
+                .and_then(panel_dimensions_from_tuple)
         })
-        .unwrap_or_else(|| infer_panel_size(device.local_name()));
+        .or_else(|| infer_panel_dimensions(device.local_name()));
     let has_alternate_vendor_service = services.iter().any(|service| {
         service
             .uuid()
@@ -182,7 +357,7 @@ pub(crate) fn resolve_device_profile(
     });
 
     let image_upload_mode =
-        if matches!(panel_size, PanelSize::Size64x64) || has_alternate_vendor_service {
+        if panel_dimensions == PanelDimensions::new(64, 64) || has_alternate_vendor_service {
             ImageUploadMode::RawRgb
         } else {
             ImageUploadMode::PngFile
@@ -194,11 +369,12 @@ pub(crate) fn resolve_device_profile(
     };
 
     DeviceProfile::new(
-        panel_size,
+        panel_dimensions,
         GifHeaderProfile::Timed,
         image_upload_mode,
         write_without_response_fallback,
     )
+    .with_routing_profile(routing_profile)
 }
 
 pub(crate) fn resolve_device_routing_profile(
@@ -207,42 +383,41 @@ pub(crate) fn resolve_device_routing_profile(
     selected_led_type: Option<u8>,
 ) -> Option<DeviceRoutingProfile> {
     if let Some(identity) = device.scan_identity() {
-        return Some(DeviceProfileResolver::resolve_with_selected_led_type(
-            identity,
-            led_info,
-            selected_led_type,
-        ));
+        let resolved = match selected_led_type {
+            Some(selected) => DeviceProfileResolver::resolve_with_selected_led_type(
+                identity,
+                led_info,
+                Some(selected),
+            ),
+            None => DeviceProfileResolver::resolve(identity, led_info),
+        };
+        return Some(resolved);
     }
 
     DeviceProfileResolver::resolve_without_scan_identity(led_info, selected_led_type)
 }
 
-fn panel_size_from_dimensions(panel_size: (u16, u16)) -> Option<PanelSize> {
-    match panel_size {
-        (16, 16) => Some(PanelSize::Size16x16),
-        (32, 32) => Some(PanelSize::Size32x32),
-        (64, 64) => Some(PanelSize::Size64x64),
-        _ => None,
-    }
+fn panel_dimensions_from_tuple(panel_size: (u16, u16)) -> Option<PanelDimensions> {
+    PanelDimensions::new(panel_size.0, panel_size.1)
 }
 
-fn infer_panel_size(local_name: Option<&str>) -> PanelSize {
+fn infer_panel_dimensions(local_name: Option<&str>) -> Option<PanelDimensions> {
     let Some(local_name) = local_name else {
-        return PanelSize::Unknown;
+        return None;
     };
     let lower = local_name.to_ascii_lowercase();
 
     if lower.contains("64") {
-        return PanelSize::Size64x64;
+        return PanelDimensions::new(64, 64);
     }
     if lower.contains("32") {
-        return PanelSize::Size32x32;
+        return PanelDimensions::new(32, 32);
     }
     if lower.contains("16") {
-        return PanelSize::Size16x16;
+        return PanelDimensions::new(16, 16);
     }
 
-    PanelSize::Unknown
+    None
 }
 
 #[cfg(test)]
@@ -308,11 +483,14 @@ mod tests {
             None,
         );
 
-        assert_eq!(PanelSize::Size64x64, resolved.panel_size());
-        assert_eq!(ImageUploadMode::RawRgb, resolved.image_upload_mode());
         assert_eq!(
-            protocol::TRANSPORT_CHUNK_FALLBACK,
-            resolved.write_without_response_fallback()
+            DeviceProfile::new(
+                PanelDimensions::new(64, 64),
+                GifHeaderProfile::Timed,
+                ImageUploadMode::RawRgb,
+                protocol::TRANSPORT_CHUNK_FALLBACK,
+            ),
+            resolved
         );
     }
 
@@ -325,11 +503,14 @@ mod tests {
             None,
         );
 
-        assert_eq!(PanelSize::Unknown, resolved.panel_size());
-        assert_eq!(ImageUploadMode::PngFile, resolved.image_upload_mode());
         assert_eq!(
-            protocol::TRANSPORT_CHUNK_FALLBACK,
-            resolved.write_without_response_fallback()
+            DeviceProfile::new(
+                None,
+                GifHeaderProfile::Timed,
+                ImageUploadMode::PngFile,
+                protocol::TRANSPORT_CHUNK_FALLBACK,
+            ),
+            resolved
         );
     }
 
@@ -343,8 +524,13 @@ mod tests {
         );
 
         assert_eq!(
-            protocol::TRANSPORT_CHUNK_FALLBACK,
-            resolved.write_without_response_fallback()
+            DeviceProfile::new(
+                PanelDimensions::new(64, 64),
+                GifHeaderProfile::Timed,
+                ImageUploadMode::RawRgb,
+                protocol::TRANSPORT_CHUNK_FALLBACK,
+            ),
+            resolved
         );
     }
 
@@ -357,8 +543,15 @@ mod tests {
             None,
         );
 
-        assert_eq!(PanelSize::Size64x64, resolved.panel_size());
-        assert_eq!(ImageUploadMode::RawRgb, resolved.image_upload_mode());
+        assert_eq!(
+            DeviceProfile::new(
+                PanelDimensions::new(64, 64),
+                GifHeaderProfile::Timed,
+                ImageUploadMode::RawRgb,
+                protocol::TRANSPORT_CHUNK_FALLBACK,
+            ),
+            resolved
+        );
     }
 
     #[test]

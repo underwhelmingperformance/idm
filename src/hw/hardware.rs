@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use tracing::{info, instrument, trace};
 
-use super::DeviceRoutingProfile;
 use super::btleplug_backend::BtleplugBackend;
 use super::fake_backend::{FakeBackend, FakeBackendConfig};
 use super::model::{
@@ -53,9 +52,6 @@ pub(crate) trait ConnectedBleSession: Send {
 
     /// Returns the resolved device profile for this session.
     fn device_profile(&self) -> DeviceProfile;
-
-    /// Returns the resolved routing profile for this session, when available.
-    fn device_routing_profile(&self) -> Option<DeviceRoutingProfile>;
 
     /// Reads one endpoint value.
     async fn read_endpoint(&self, endpoint: EndpointId) -> Result<Vec<u8>, InteractionError>;
@@ -255,12 +251,6 @@ impl DeviceSession {
     #[must_use]
     pub fn device_profile(&self) -> DeviceProfile {
         self.session.device_profile()
-    }
-
-    /// Returns the resolved routing profile for this session, when available.
-    #[must_use]
-    pub fn device_routing_profile(&self) -> Option<DeviceRoutingProfile> {
-        self.session.device_routing_profile()
     }
 
     /// Reads one endpoint value.

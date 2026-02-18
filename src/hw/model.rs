@@ -3,10 +3,10 @@ use std::fmt::Display;
 
 use crate::protocol::EndpointId;
 
+use super::DeviceProfile;
 use super::diagnostics::ConnectionDiagnostics;
 use super::scan_model::{ModelProfile, ScanIdentity};
 use super::session::GattProfile;
-use super::{DeviceProfile, DeviceRoutingProfile};
 
 /// A discovered BLE peripheral that matched a scan predicate.
 #[derive(Debug, Clone, Eq, PartialEq)]
@@ -237,7 +237,6 @@ pub struct SessionMetadata {
     required_endpoints_verified: bool,
     write_without_response_limit: Option<usize>,
     device_profile: DeviceProfile,
-    device_routing_profile: Option<DeviceRoutingProfile>,
     connection_diagnostics: ConnectionDiagnostics,
     gatt_profile: Option<GattProfile>,
     resolved_endpoint_uuids: HashMap<EndpointId, String>,
@@ -254,19 +253,10 @@ impl SessionMetadata {
             required_endpoints_verified,
             write_without_response_limit,
             device_profile,
-            device_routing_profile: None,
             connection_diagnostics: ConnectionDiagnostics::default(),
             gatt_profile: None,
             resolved_endpoint_uuids: HashMap::new(),
         }
-    }
-
-    pub(crate) fn with_device_routing_profile(
-        mut self,
-        device_routing_profile: Option<DeviceRoutingProfile>,
-    ) -> Self {
-        self.device_routing_profile = device_routing_profile;
-        self
     }
 
     pub(crate) fn with_connection_diagnostics(
@@ -303,12 +293,6 @@ impl SessionMetadata {
     #[must_use]
     pub fn device_profile(&self) -> DeviceProfile {
         self.device_profile
-    }
-
-    /// Returns the resolved routing profile derived from scan/model identity.
-    #[must_use]
-    pub fn device_routing_profile(&self) -> Option<DeviceRoutingProfile> {
-        self.device_routing_profile
     }
 
     pub(crate) fn connection_diagnostics(&self) -> &ConnectionDiagnostics {

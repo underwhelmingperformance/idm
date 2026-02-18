@@ -38,8 +38,8 @@ struct SessionMetadataSection {
     resolved_write_characteristic_uuid: UnknownOr<String>,
     #[diagnostic(name = "Resolved read/notify UUID")]
     resolved_read_notify_uuid: UnknownOr<String>,
-    #[diagnostic(name = "Profile panel size")]
-    profile_panel_size: crate::hw::PanelSize,
+    #[diagnostic(name = "Profile panel dimensions")]
+    profile_panel_dimensions: UnknownOr<crate::hw::PanelDimensions>,
     #[diagnostic(name = "Profile LED type")]
     profile_led_type: UnknownOr<u8>,
     #[diagnostic(name = "Profile text path")]
@@ -112,7 +112,6 @@ impl From<&InspectReport> for SessionMetadataSection {
     fn from(report: &InspectReport) -> Self {
         let metadata = report.session_metadata();
         let profile = metadata.device_profile();
-        let routing_profile = metadata.device_routing_profile();
 
         Self {
             required_endpoints_verified: YesNo(metadata.required_endpoints_verified()),
@@ -140,10 +139,10 @@ impl From<&InspectReport> for SessionMetadataSection {
                     .resolved_endpoint_uuid(protocol::EndpointId::ReadNotifyCharacteristic)
                     .map(str::to_owned),
             ),
-            profile_panel_size: profile.panel_size(),
-            profile_led_type: UnknownOr(routing_profile.and_then(|value| value.led_type)),
-            profile_text_path: UnknownOr(routing_profile.and_then(|value| value.text_path)),
-            profile_joint_mode: NoneOr(routing_profile.and_then(|value| value.joint_mode)),
+            profile_panel_dimensions: UnknownOr(profile.panel_dimensions()),
+            profile_led_type: UnknownOr(profile.led_type()),
+            profile_text_path: UnknownOr(profile.text_path()),
+            profile_joint_mode: NoneOr(profile.joint_mode()),
             profile_image_upload_mode: profile.image_upload_mode(),
             profile_gif_header: profile.gif_header_profile(),
             profile_write_chunk_fallback: Bytes(profile.write_without_response_fallback()),
@@ -304,7 +303,7 @@ mod tests {
 
     use crate::hw::{
         CharacteristicInfo, DeviceProfile, EndpointPresence, FoundDevice, GifHeaderProfile,
-        ImageUploadMode, PanelSize, ServiceInfo, SessionMetadata,
+        ImageUploadMode, ServiceInfo, SessionMetadata,
     };
     use crate::protocol;
 
@@ -342,12 +341,7 @@ mod tests {
             SessionMetadata::new(
                 true,
                 Some(514),
-                DeviceProfile::new(
-                    PanelSize::Unknown,
-                    GifHeaderProfile::Timed,
-                    ImageUploadMode::PngFile,
-                    512,
-                ),
+                DeviceProfile::new(None, GifHeaderProfile::Timed, ImageUploadMode::PngFile, 512),
             ),
         )
     }
@@ -383,12 +377,7 @@ mod tests {
             SessionMetadata::new(
                 false,
                 None,
-                DeviceProfile::new(
-                    PanelSize::Unknown,
-                    GifHeaderProfile::Timed,
-                    ImageUploadMode::PngFile,
-                    512,
-                ),
+                DeviceProfile::new(None, GifHeaderProfile::Timed, ImageUploadMode::PngFile, 512),
             ),
         );
         let painter = Painter::new(false);

@@ -26,10 +26,10 @@ pub use handlers::{
     TextUploadHandler, TextUploadRequest, TimeSyncHandler, UploadPacing, UploadReceipt,
 };
 pub use hw::{
-    AmbiguousShape, CharacteristicInfo, DeviceProfile, DeviceProfileResolver, DeviceRoutingProfile,
-    DeviceSession, EndpointPresence, FoundDevice, GattProfile, GifHeaderProfile, HardwareClient,
-    ImageUploadMode, InspectReport, LedInfoResponse, ListenStopReason, ListenSummary, ModelProfile,
-    ModelResolutionConfig, NotificationRunSummary, PanelSize, ScanIdentity, ScanModelHandler,
+    AmbiguousShape, CharacteristicInfo, DeviceProfile, DeviceSession, EndpointPresence,
+    FoundDevice, GattProfile, GifHeaderProfile, HardwareClient, ImageUploadMode, InspectReport,
+    LedInfoResponse, ListenStopReason, ListenSummary, ModelProfile, ModelResolutionConfig,
+    NotificationRunSummary, PanelDimensions, PanelSize, ScanIdentity, ScanModelHandler,
     ServiceInfo, SessionMetadata, TextPath, WriteMode,
 };
 pub use notification::{NotificationDecodeError, NotificationHandler, NotifyEvent, TransferFamily};

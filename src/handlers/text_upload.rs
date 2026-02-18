@@ -334,10 +334,8 @@ fn write_chunk_size(session: &DeviceSession) -> Result<usize, ProtocolError> {
 }
 
 fn ensure_text_path_is_resolved(session: &DeviceSession) -> Result<(), ProtocolError> {
-    if session
-        .device_routing_profile()
-        .is_some_and(|profile| profile.text_path.is_none())
-    {
+    let profile = session.device_profile();
+    if profile.routing_profile_present() && profile.text_path().is_none() {
         return Err(TextUploadError::UnresolvedTextPath.into());
     }
 
@@ -418,12 +416,10 @@ struct TextEncodingContext {
 }
 
 fn encoding_context(session: &DeviceSession) -> TextEncodingContext {
-    let routing_profile = session.device_routing_profile();
+    let profile = session.device_profile();
     TextEncodingContext {
-        text_path: routing_profile
-            .and_then(|profile| profile.text_path)
-            .unwrap_or(TextPath::Path1616),
-        led_type: routing_profile.and_then(|profile| profile.led_type),
+        text_path: profile.text_path().unwrap_or(TextPath::Path1616),
+        led_type: profile.led_type(),
     }
 }
 

@@ -394,15 +394,19 @@ mod tests {
         let diagnostics = model_resolution_diagnostics(
             scan_identity,
             None,
-            None,
-            LedInfoQueryOutcome::NoResponse,
-            Vec::new(),
-            false,
-            None,
-            ScreenLightQueryOutcome::NoResponse,
-            Vec::new(),
-            None,
-            None,
+            LedInfoDiagnosticParams {
+                response: None,
+                query_outcome: LedInfoQueryOutcome::NoResponse,
+                write_modes_attempted: Vec::new(),
+                sync_time_fallback_attempted: false,
+                last_payload: None,
+            },
+            ScreenLightDiagnosticParams {
+                query_outcome: ScreenLightQueryOutcome::NoResponse,
+                write_modes_attempted: Vec::new(),
+                last_payload: None,
+                timeout: None,
+            },
         );
         let rows = section_rows(&diagnostics, "scan_identity");
         assert_eq!(expected_rows, rows);
@@ -424,24 +428,28 @@ mod tests {
         let diagnostics = model_resolution_diagnostics(
             None,
             Some(&scan_properties_debug),
-            Some(LedInfoResponse {
-                mcu_major_version: 0x05,
-                mcu_minor_version: 0x03,
-                status: 0x01,
-                screen_type: 0x04,
-                password_enabled: false,
-            }),
-            LedInfoQueryOutcome::ParsedNotifyAfterSyncTime,
-            vec![
-                "without_response:get_led_type".to_string(),
-                "with_response:get_led_type".to_string(),
-            ],
-            true,
-            Some(vec![0x09, 0x00, 0x01, 0x80, 0x05, 0x03, 0x01, 0x04, 0x00]),
-            ScreenLightQueryOutcome::ParsedRead,
-            vec!["without_response:read_screen_light".to_string()],
-            Some(vec![0x05, 0x00, 0x0F, 0x80, 0x1E]),
-            Some(0x1E),
+            LedInfoDiagnosticParams {
+                response: Some(LedInfoResponse {
+                    mcu_major_version: 0x05,
+                    mcu_minor_version: 0x03,
+                    status: 0x01,
+                    screen_type: 0x04,
+                    password_enabled: false,
+                }),
+                query_outcome: LedInfoQueryOutcome::ParsedNotifyAfterSyncTime,
+                write_modes_attempted: vec![
+                    "without_response:get_led_type".to_string(),
+                    "with_response:get_led_type".to_string(),
+                ],
+                sync_time_fallback_attempted: true,
+                last_payload: Some(vec![0x09, 0x00, 0x01, 0x80, 0x05, 0x03, 0x01, 0x04, 0x00]),
+            },
+            ScreenLightDiagnosticParams {
+                query_outcome: ScreenLightQueryOutcome::ParsedRead,
+                write_modes_attempted: vec!["without_response:read_screen_light".to_string()],
+                last_payload: Some(vec![0x05, 0x00, 0x0F, 0x80, 0x1E]),
+                timeout: Some(0x1E),
+            },
         );
 
         assert_eq!(

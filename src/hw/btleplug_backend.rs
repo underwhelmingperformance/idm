@@ -21,8 +21,8 @@ use super::model::{
 };
 use super::model_overrides::{ModelOverrideStore, ModelResolutionConfig, is_supported_led_type};
 use super::model_resolution_diagnostics::{
-    LedInfoDiagnosticParams, ManufacturerDataRecord, ScreenLightDiagnosticParams,
-    ScanPropertiesDebug, ServiceDataRecord, model_resolution_diagnostics,
+    LedInfoDiagnosticParams, ManufacturerDataRecord, ScanPropertiesDebug,
+    ScreenLightDiagnosticParams, ServiceDataRecord, model_resolution_diagnostics,
 };
 use super::profile::{resolve_device_profile, resolve_device_routing_profile};
 use super::scan_model::{ScanIdentity, ScanModelHandler};
@@ -337,7 +337,6 @@ impl BtleplugBackend {
         );
         let session_metadata =
             SessionMetadata::new(true, write_without_response_limit, device_profile)
-                .with_device_routing_profile(device_routing_profile)
                 .with_connection_diagnostics(connection_diagnostics)
                 .with_endpoint_resolution(
                     negotiated_endpoints.gatt_profile,
@@ -1149,10 +1148,6 @@ impl ConnectedBleSession for RealDeviceSession {
 
     fn device_profile(&self) -> DeviceProfile {
         self.session_metadata.device_profile()
-    }
-
-    fn device_routing_profile(&self) -> Option<super::DeviceRoutingProfile> {
-        self.session_metadata.device_routing_profile()
     }
 
     #[instrument(skip(self), level = "trace", fields(?endpoint))]

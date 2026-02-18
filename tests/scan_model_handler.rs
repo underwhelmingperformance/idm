@@ -1,6 +1,10 @@
 use pretty_assertions::assert_eq;
 use rstest::rstest;
 
+fn dimensions(width: u16, height: u16) -> idm::PanelDimensions {
+    idm::PanelDimensions::new(width, height).expect("test panel dimensions should be valid")
+}
+
 #[rstest]
 #[case(
     &[0x0F, 0xFF, 0x54, 0x52, 0x00, 0x70, 0x04, 0x01, 0x02, 0x00, 0x01, 0x05, 0x20, 0x00, 0x20, 0x00],
@@ -26,19 +30,11 @@ async fn fake_session_profile_uses_scan_model_payload_when_available() -> anyhow
 
     let session = client.connect_first_device("IDM-").await?;
     let profile = session.device_profile();
-    let routing = session.device_routing_profile();
-
-    assert_eq!(idm::PanelSize::Size64x64, profile.panel_size());
+    assert_eq!(Some(dimensions(64, 64)), profile.panel_dimensions());
     assert_eq!(idm::ImageUploadMode::RawRgb, profile.image_upload_mode());
-    assert_eq!(
-        Some(idm::DeviceRoutingProfile {
-            led_type: Some(4),
-            panel_size: Some((64, 64)),
-            text_path: Some(idm::TextPath::Path6464),
-            joint_mode: None,
-        }),
-        routing
-    );
+    assert_eq!(Some(4), profile.led_type());
+    assert_eq!(Some(idm::TextPath::Path6464), profile.text_path());
+    assert_eq!(None, profile.joint_mode());
     session.close().await?;
 
     Ok(())
@@ -71,15 +67,11 @@ async fn ambiguous_shape_resolves_when_led_info_response_is_available() -> anyho
     let client = idm::fake_hardware_client(fake_args);
 
     let session = client.connect_first_device("IDM-").await?;
-    assert_eq!(
-        Some(idm::DeviceRoutingProfile {
-            led_type: Some(2),
-            panel_size: Some((8, 32)),
-            text_path: Some(idm::TextPath::Path832),
-            joint_mode: Some(2),
-        }),
-        session.device_routing_profile()
-    );
+    let profile = session.device_profile();
+    assert_eq!(Some(dimensions(8, 32)), profile.panel_dimensions());
+    assert_eq!(Some(2), profile.led_type());
+    assert_eq!(Some(idm::TextPath::Path832), profile.text_path());
+    assert_eq!(Some(2), profile.joint_mode());
     session.close().await?;
 
     Ok(())
@@ -94,15 +86,11 @@ async fn cid_pid_capability_fallback_resolves_profile_when_shape_is_unknown() ->
     let client = idm::fake_hardware_client(fake_args);
 
     let session = client.connect_first_device("IDM-").await?;
-    assert_eq!(
-        Some(idm::DeviceRoutingProfile {
-            led_type: Some(4),
-            panel_size: Some((64, 64)),
-            text_path: Some(idm::TextPath::Path6464),
-            joint_mode: None,
-        }),
-        session.device_routing_profile()
-    );
+    let profile = session.device_profile();
+    assert_eq!(Some(dimensions(64, 64)), profile.panel_dimensions());
+    assert_eq!(Some(4), profile.led_type());
+    assert_eq!(Some(idm::TextPath::Path6464), profile.text_path());
+    assert_eq!(None, profile.joint_mode());
     session.close().await?;
 
     Ok(())

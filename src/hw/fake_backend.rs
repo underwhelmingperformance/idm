@@ -160,7 +160,6 @@ impl FakeBackend {
         );
         let session_metadata =
             SessionMetadata::new(true, write_without_response_limit, device_profile)
-                .with_device_routing_profile(device_routing_profile)
                 .with_endpoint_resolution(
                     negotiated_endpoints.gatt_profile,
                     negotiated_endpoints.endpoint_uuids.clone(),
@@ -209,10 +208,6 @@ impl ConnectedBleSession for FakeDeviceSession {
 
     fn device_profile(&self) -> DeviceProfile {
         self.session_metadata.device_profile()
-    }
-
-    fn device_routing_profile(&self) -> Option<super::DeviceRoutingProfile> {
-        self.session_metadata.device_routing_profile()
     }
 
     #[instrument(skip(self), level = "trace", fields(?endpoint))]

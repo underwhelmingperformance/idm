@@ -36,10 +36,13 @@ async fn fake_session_connect_populates_report_metadata() -> anyhow::Result<()> 
             .resolved_endpoint_uuid(idm::EndpointId::ReadNotifyCharacteristic)
     );
     assert_eq!(
-        idm::PanelSize::Unknown,
-        report.session_metadata().device_profile().panel_size()
+        None,
+        report
+            .session_metadata()
+            .device_profile()
+            .panel_dimensions()
     );
-    assert_eq!(None, report.session_metadata().device_routing_profile());
+    assert_eq!(None, report.session_metadata().device_profile().led_type());
     assert_eq!(
         509,
         report

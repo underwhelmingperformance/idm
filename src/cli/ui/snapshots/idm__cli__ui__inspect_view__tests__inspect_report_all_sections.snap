@@ -1,5 +1,6 @@
 ---
 source: src/cli/ui/inspect_view.rs
+assertion_line: 358
 expression: "InspectReportView::new(&report, &painter).to_string()"
 ---
 Connected device:
@@ -25,7 +26,7 @@ Session metadata:
 │ Read/notify characteristic properties │ read,notify │
 │ Resolved write characteristic UUID    │ <unknown>   │
 │ Resolved read/notify UUID             │ <unknown>   │
-│ Profile panel size                    │ unknown     │
+│ Profile panel dimensions              │ <unknown>   │
 │ Profile LED type                      │ <unknown>   │
 │ Profile text path                     │ <unknown>   │
 │ Profile joint mode                    │ <none>      │
