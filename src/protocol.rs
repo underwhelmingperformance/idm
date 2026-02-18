@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+use serde_with::SerializeDisplay;
 use strum::IntoEnumIterator;
 use strum_macros::{Display, EnumIter};
 
@@ -14,7 +15,7 @@ pub(crate) const TRANSPORT_CHUNK_MTU_READY: usize = 509;
 pub(crate) const TRANSPORT_CHUNK_FALLBACK: usize = 18;
 
 /// Known iDotMatrix protocol endpoints.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, EnumIter, Display)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, EnumIter, Display, SerializeDisplay)]
 pub enum EndpointId {
     /// iDotMatrix primary control service.
     #[strum(to_string = "control_service")]

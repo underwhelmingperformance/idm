@@ -1,3 +1,4 @@
+use serde_with::SerializeDisplay;
 use std::collections::HashMap;
 use tracing::instrument;
 
@@ -16,7 +17,7 @@ pub(crate) const OTA_SERVICE_UUID: &str = "0000ae00-0000-1000-8000-00805f9b34fb"
 pub(crate) const OTA_WRITE_UUID: &str = "0000ae01-0000-1000-8000-00805f9b34fb";
 pub(crate) const OTA_NOTIFY_UUID: &str = "0000ae02-0000-1000-8000-00805f9b34fb";
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, derive_more::Display)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, derive_more::Display, SerializeDisplay)]
 pub enum GattProfile {
     #[display("fa_fa02")]
     FaFa02,

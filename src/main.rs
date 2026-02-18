@@ -1,8 +1,11 @@
-use clap::Parser;
+use std::io::IsTerminal;
 use std::process::ExitCode;
 
+use clap::Parser;
+
 use idm::{
-    Args, fake_hardware_client, real_hardware_client_with_model_resolution, run_with_log_level,
+    Args, OutputFormat, fake_hardware_client, real_hardware_client_with_model_resolution,
+    run_with_log_level,
 };
 
 #[tokio::main]
@@ -13,6 +16,11 @@ async fn main() -> ExitCode {
 
     let run_result = async {
         let log_level = args.log_level();
+        let output_format = args.output_format().unwrap_or(if stdout.is_terminal() {
+            OutputFormat::Pretty
+        } else {
+            OutputFormat::Json
+        });
         let model_resolution = args.model_resolution();
         let (command, maybe_fake_args) = args.into_command_and_fake_args()?;
         let hardware_client = match maybe_fake_args {
@@ -20,7 +28,14 @@ async fn main() -> ExitCode {
             None => real_hardware_client_with_model_resolution(model_resolution),
         };
 
-        run_with_log_level(command, &mut stdout, hardware_client, log_level).await
+        run_with_log_level(
+            command,
+            &mut stdout,
+            hardware_client,
+            log_level,
+            output_format,
+        )
+        .await
     }
     .await;
 

@@ -3,15 +3,41 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
+use serde::Serialize;
 use time::OffsetDateTime;
 use tracing::instrument;
 
+use crate::cli::OutputFormat;
 use crate::hw::HardwareClient;
 use crate::{
     Brightness, BrightnessHandler, FullscreenColourHandler, PowerHandler, Rgb, ScreenPower,
     SessionHandler, TextOptions, TextUploadHandler, TextUploadRequest, TimeSyncHandler,
     UploadPacing,
 };
+
+/// JSON result emitted by a `control` action.
+#[derive(Serialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+enum ControlResult {
+    Power {
+        state: String,
+    },
+    Brightness {
+        value: u8,
+    },
+    Colour {
+        red: u8,
+        green: u8,
+        blue: u8,
+    },
+    SyncTime {
+        unix_timestamp: i64,
+    },
+    Text {
+        bytes_written: usize,
+        chunks_written: usize,
+    },
+}
 
 /// Arguments for the `control` command.
 #[derive(Debug, Args)]
@@ -220,18 +246,19 @@ fn parse_brightness(value: &str) -> Result<Brightness, String> {
 }
 
 /// Executes the `control` command.
-#[instrument(skip(client, args, out), level = "info", fields(action = ?args.action))]
+#[instrument(skip(client, args, out), level = "info", fields(action = ?args.action, ?output_format))]
 pub(crate) async fn run<W>(
     client: Box<dyn HardwareClient>,
     args: &ControlArgs,
     out: &mut W,
+    output_format: OutputFormat,
 ) -> Result<()>
 where
     W: io::Write,
 {
     let session = SessionHandler::new(client).connect_first().await?;
 
-    let command_result = run_with_session(&session, args, out).await;
+    let command_result = run_with_session(&session, args, out, output_format).await;
     let close_result = session.close().await;
 
     if let Err(error) = close_result {
@@ -244,11 +271,12 @@ where
     command_result
 }
 
-#[instrument(skip(session, args, out), level = "debug", fields(action = ?args.action))]
+#[instrument(skip(session, args, out), level = "debug", fields(action = ?args.action, ?output_format))]
 async fn run_with_session<W>(
     session: &crate::DeviceSession,
     args: &ControlArgs,
     out: &mut W,
+    output_format: OutputFormat,
 ) -> Result<()>
 where
     W: io::Write,
@@ -256,47 +284,116 @@ where
     match &args.action {
         ControlAction::Power(power_args) => {
             PowerHandler::set_power(session, power_args.state.to_handler_power()).await?;
-            writeln!(out, "Applied power state: {}", power_args.state)?;
+            match output_format {
+                OutputFormat::Pretty => {
+                    writeln!(out, "Applied power state: {}", power_args.state)?;
+                }
+                OutputFormat::Json => {
+                    write_json_line(
+                        out,
+                        &ControlResult::Power {
+                            state: power_args.state.to_string(),
+                        },
+                    )?;
+                }
+            }
         }
         ControlAction::Brightness(brightness_args) => {
             BrightnessHandler::set_brightness(session, brightness_args.brightness).await?;
-            writeln!(
-                out,
-                "Applied brightness: {}",
-                brightness_args.brightness.value()
-            )?;
+            match output_format {
+                OutputFormat::Pretty => {
+                    writeln!(
+                        out,
+                        "Applied brightness: {}",
+                        brightness_args.brightness.value()
+                    )?;
+                }
+                OutputFormat::Json => {
+                    write_json_line(
+                        out,
+                        &ControlResult::Brightness {
+                            value: brightness_args.brightness.value(),
+                        },
+                    )?;
+                }
+            }
         }
         ControlAction::Colour(colour_args) => {
             let colour = Rgb::new(colour_args.red, colour_args.green, colour_args.blue);
             FullscreenColourHandler::set_colour(session, colour).await?;
-            writeln!(
-                out,
-                "Applied fullscreen colour: #{:02X}{:02X}{:02X}",
-                colour.r, colour.g, colour.b
-            )?;
+            match output_format {
+                OutputFormat::Pretty => {
+                    writeln!(
+                        out,
+                        "Applied fullscreen colour: #{:02X}{:02X}{:02X}",
+                        colour.r, colour.g, colour.b
+                    )?;
+                }
+                OutputFormat::Json => {
+                    write_json_line(
+                        out,
+                        &ControlResult::Colour {
+                            red: colour.r,
+                            green: colour.g,
+                            blue: colour.b,
+                        },
+                    )?;
+                }
+            }
         }
         ControlAction::SyncTime(sync_time_args) => {
             let timestamp = sync_time_args.resolve_timestamp()?;
             TimeSyncHandler::sync_time(session, timestamp).await?;
-            writeln!(
-                out,
-                "Synced time (UTC unix): {}",
-                timestamp.unix_timestamp()
-            )?;
+            match output_format {
+                OutputFormat::Pretty => {
+                    writeln!(
+                        out,
+                        "Synced time (UTC unix): {}",
+                        timestamp.unix_timestamp()
+                    )?;
+                }
+                OutputFormat::Json => {
+                    write_json_line(
+                        out,
+                        &ControlResult::SyncTime {
+                            unix_timestamp: timestamp.unix_timestamp(),
+                        },
+                    )?;
+                }
+            }
         }
         ControlAction::Text(text_args) => {
             let receipt =
                 TextUploadHandler::upload(session, default_cli_text_request(&text_args.text))
                     .await?;
-            writeln!(
-                out,
-                "Uploaded text payload: {} bytes in {} chunk(s)",
-                receipt.bytes_written(),
-                receipt.chunks_written(),
-            )?;
+            match output_format {
+                OutputFormat::Pretty => {
+                    writeln!(
+                        out,
+                        "Uploaded text payload: {} bytes in {} chunk(s)",
+                        receipt.bytes_written(),
+                        receipt.chunks_written(),
+                    )?;
+                }
+                OutputFormat::Json => {
+                    write_json_line(
+                        out,
+                        &ControlResult::Text {
+                            bytes_written: receipt.bytes_written(),
+                            chunks_written: receipt.chunks_written(),
+                        },
+                    )?;
+                }
+            }
         }
     }
 
+    Ok(())
+}
+
+fn write_json_line(out: &mut impl io::Write, value: &impl Serialize) -> Result<()> {
+    serde_json::to_writer_pretty(&mut *out, value)?;
+    writeln!(out)?;
     Ok(())
 }
 

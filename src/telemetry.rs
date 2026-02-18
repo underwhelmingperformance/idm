@@ -15,19 +15,30 @@ use tracing_subscriber::fmt;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
+use crate::cli::OutputFormat;
 use crate::error::TelemetryError;
 
 static TRACING_INITIALISED: OnceLock<Result<(), TelemetryError>> = OnceLock::new();
 
 /// Initialises structured logging and OpenTelemetry tracing support.
+///
+/// When `output_format` is [`OutputFormat::Json`], the non-interactive path is
+/// forced regardless of terminal state so progress bars do not interfere with
+/// machine-readable output.
 pub(crate) fn initialise_tracing(
     service_name: &str,
     interactive_terminal: bool,
     log_level_override: Option<LevelFilter>,
+    output_format: OutputFormat,
 ) -> Result<(), &'static TelemetryError> {
     TRACING_INITIALISED
         .get_or_init(|| {
-            initialise_tracing_once(service_name, interactive_terminal, log_level_override)
+            initialise_tracing_once(
+                service_name,
+                interactive_terminal,
+                log_level_override,
+                output_format,
+            )
         })
         .as_ref()
         .copied()
@@ -37,13 +48,15 @@ fn initialise_tracing_once(
     service_name: &str,
     interactive_terminal: bool,
     log_level_override: Option<LevelFilter>,
+    output_format: OutputFormat,
 ) -> Result<(), TelemetryError> {
     let tracer_provider = opentelemetry_sdk::trace::SdkTracerProvider::builder().build();
     let tracer = tracer_provider.tracer(service_name.to_owned());
     global::set_tracer_provider(tracer_provider);
 
     let log_filter = configured_log_filter(log_level_override);
-    let is_interactive = interactive_terminal && io::stderr().is_terminal();
+    let is_interactive =
+        output_format == OutputFormat::Pretty && interactive_terminal && io::stderr().is_terminal();
 
     if is_interactive {
         let indicatif_layer = IndicatifLayer::new()

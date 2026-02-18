@@ -40,6 +40,10 @@ pub struct Args {
     /// Override the telemetry log verbosity.
     #[arg(long, global = true, value_enum)]
     log_level: Option<LogLevel>,
+    /// Output format for command results. Defaults to `pretty` when stdout is a
+    /// terminal, `json` otherwise.
+    #[arg(long, global = true, value_enum)]
+    output_format: Option<OutputFormat>,
     #[command(subcommand)]
     command: Command,
 }
@@ -65,6 +69,7 @@ impl Args {
             model_led_type: None,
             model_overrides_path: None,
             log_level: None,
+            output_format: None,
             command,
         }
     }
@@ -103,6 +108,12 @@ impl Args {
         self.log_level
     }
 
+    /// Returns the explicitly selected output format, if any.
+    #[must_use]
+    pub fn output_format(&self) -> Option<OutputFormat> {
+        self.output_format
+    }
+
     /// Splits parsed CLI arguments into command and optional fake-client settings.
     ///
     /// # Errors
@@ -118,6 +129,7 @@ impl Args {
             model_led_type,
             model_overrides_path,
             log_level: _,
+            output_format: _,
             command,
         } = self;
 
@@ -139,6 +151,15 @@ impl Args {
 
         Ok((command, fake_args))
     }
+}
+
+/// Output format for command results.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, ValueEnum)]
+pub enum OutputFormat {
+    /// Human-readable styled output.
+    Pretty,
+    /// Machine-readable JSON output.
+    Json,
 }
 
 /// Log verbosity override for tracing and log events.
@@ -323,6 +344,36 @@ mod tests {
             Some(std::path::Path::new("/tmp/idm-overrides.tsv")),
             model_resolution.overrides_path()
         );
+    }
+
+    #[test]
+    fn output_format_argument_parses() {
+        let cli = Args::try_parse_from([
+            "idm",
+            "--output-format",
+            "json",
+            "--fake",
+            "--fake-scan",
+            "hci0|AA:BB:CC|IDM-Clock|-43",
+            "inspect",
+        ])
+        .expect("output-format should parse as a value enum");
+
+        assert_eq!(Some(OutputFormat::Json), cli.output_format());
+    }
+
+    #[test]
+    fn output_format_defaults_to_none() {
+        let cli = Args::try_parse_from([
+            "idm",
+            "--fake",
+            "--fake-scan",
+            "hci0|AA:BB:CC|IDM-Clock|-43",
+            "inspect",
+        ])
+        .expect("should parse without output-format");
+
+        assert_eq!(None, cli.output_format());
     }
 
     #[test]

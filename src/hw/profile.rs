@@ -1,4 +1,6 @@
 use derive_more::Display;
+use serde::Serialize;
+use serde_with::SerializeDisplay;
 use std::fmt::{self, Formatter};
 
 use super::device_profile_resolver::{
@@ -11,7 +13,7 @@ const ALTERNATE_VENDOR_SERVICE_UUID: &str = "0000ae00-0000-1000-8000-00805f9b34f
 const UNUSABLE_WRITE_WITHOUT_RESPONSE_LIMIT: usize = 20;
 
 /// Concrete panel dimensions in pixels.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash, Serialize)]
 pub struct PanelDimensions {
     width: u16,
     height: u16,
@@ -73,7 +75,7 @@ impl fmt::Display for PanelDimensions {
 }
 
 /// Logical iDotMatrix panel size.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Display)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Display, SerializeDisplay)]
 pub enum PanelSize {
     /// A `8x32` panel.
     #[display("8x32")]
@@ -102,7 +104,7 @@ pub enum PanelSize {
 }
 
 /// GIF header profile used when encoding bytes `13..15`.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Display)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Display, SerializeDisplay)]
 pub enum GifHeaderProfile {
     /// Timed profile (`time_hi time_lo type`), commonly ending in `... 05 00 0D`.
     #[display("timed")]
@@ -113,7 +115,7 @@ pub enum GifHeaderProfile {
 }
 
 /// Image upload mode to use for DIY/media handlers.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Display)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Display, SerializeDisplay)]
 pub enum ImageUploadMode {
     /// PNG file-byte upload.
     #[display("png_file")]
@@ -124,7 +126,7 @@ pub enum ImageUploadMode {
 }
 
 /// Resolved device behaviour profile.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize)]
 pub struct DeviceProfile {
     panel_dimensions: Option<PanelDimensions>,
     routing_profile_present: bool,
@@ -402,9 +404,7 @@ fn panel_dimensions_from_tuple(panel_size: (u16, u16)) -> Option<PanelDimensions
 }
 
 fn infer_panel_dimensions(local_name: Option<&str>) -> Option<PanelDimensions> {
-    let Some(local_name) = local_name else {
-        return None;
-    };
+    let local_name = local_name?;
     let lower = local_name.to_ascii_lowercase();
 
     if lower.contains("64") {

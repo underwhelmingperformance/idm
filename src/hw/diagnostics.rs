@@ -1,7 +1,9 @@
 use std::fmt::Display;
 
+use serde::Serialize;
+
 /// A single key/value row within a diagnostics section.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize)]
 pub(crate) struct DiagnosticRow {
     label: String,
     value: String,
@@ -46,7 +48,7 @@ pub(crate) trait HasDiagnostics {
 }
 
 /// Immutable diagnostics snapshot stored in session metadata.
-#[derive(Debug, Clone, Eq, PartialEq, Default)]
+#[derive(Debug, Clone, Eq, PartialEq, Default, Serialize)]
 pub(crate) struct ConnectionDiagnostics {
     sections: Vec<DiagnosticSectionSnapshot>,
 }
@@ -64,7 +66,7 @@ impl ConnectionDiagnostics {
 }
 
 /// Captured section data detached from producer lifetimes.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize)]
 pub(crate) struct DiagnosticSectionSnapshot {
     id: String,
     name: String,

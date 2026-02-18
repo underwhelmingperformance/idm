@@ -6,7 +6,7 @@ use owo_colors::OwoColorize;
 use tracing::instrument;
 use tracing_indicatif::span_ext::IndicatifSpanExt;
 
-use crate::cli::{Command, FakeArgs, LogLevel};
+use crate::cli::{Command, FakeArgs, LogLevel, OutputFormat};
 use crate::hw::{
     DeviceSession, HardwareClient, ModelResolutionConfig,
     fake_hardware_client as build_fake_hardware_client,
@@ -141,7 +141,7 @@ pub async fn run<W>(
 where
     W: io::Write,
 {
-    run_with_log_level(command, out, hardware_client, None).await
+    run_with_log_level(command, out, hardware_client, None, OutputFormat::Pretty).await
 }
 
 /// Runs the CLI command with an explicit telemetry log-level override.
@@ -160,13 +160,14 @@ where
 ///     "inspect",
 /// ])?;
 /// let log_level = args.log_level();
+/// let output_format = args.output_format().unwrap_or(idm::OutputFormat::Pretty);
 /// let (command, maybe_fake_args) = args.into_command_and_fake_args()?;
 /// let hardware_client = match maybe_fake_args {
 ///     Some(fake_args) => idm::fake_hardware_client(fake_args),
 ///     None => idm::real_hardware_client(),
 /// };
 /// let mut out = Vec::new();
-/// idm::run_with_log_level(command, &mut out, hardware_client, log_level).await?;
+/// idm::run_with_log_level(command, &mut out, hardware_client, log_level, output_format).await?;
 /// # Ok(())
 /// # }
 /// ```
@@ -180,6 +181,7 @@ pub async fn run_with_log_level<W>(
     out: &mut W,
     hardware_client: Box<dyn HardwareClient>,
     log_level: Option<LogLevel>,
+    output_format: OutputFormat,
 ) -> Result<()>
 where
     W: io::Write,
@@ -190,6 +192,7 @@ where
         &SystemTerminalClient,
         hardware_client,
         log_level,
+        output_format,
     )
     .await
 }
@@ -205,11 +208,20 @@ pub async fn run_with_clients<W>(
     out: &mut W,
     terminal_client: &dyn TerminalClient,
     hardware_client: Box<dyn HardwareClient>,
+    output_format: OutputFormat,
 ) -> Result<()>
 where
     W: io::Write,
 {
-    run_with_clients_and_log_level(command, out, terminal_client, hardware_client, None).await
+    run_with_clients_and_log_level(
+        command,
+        out,
+        terminal_client,
+        hardware_client,
+        None,
+        output_format,
+    )
+    .await
 }
 
 /// Runs the CLI command with injected clients and explicit telemetry settings.
@@ -234,6 +246,7 @@ where
 ///     "inspect",
 /// ])?;
 /// let log_level = args.log_level();
+/// let output_format = args.output_format().unwrap_or(idm::OutputFormat::Pretty);
 /// let (command, maybe_fake_args) = args.into_command_and_fake_args()?;
 /// let hardware_client = match maybe_fake_args {
 ///     Some(fake_args) => idm::fake_hardware_client(fake_args),
@@ -246,6 +259,7 @@ where
 ///     &FakeTerminal,
 ///     hardware_client,
 ///     log_level,
+///     output_format,
 /// ).await?;
 /// # Ok(())
 /// # }
@@ -258,7 +272,7 @@ where
 #[instrument(
     skip(out, terminal_client, hardware_client),
     level = "info",
-    fields(command = %command_name(&command), ?log_level)
+    fields(command = %command_name(&command), ?log_level, ?output_format)
 )]
 pub async fn run_with_clients_and_log_level<W>(
     command: Command,
@@ -266,6 +280,7 @@ pub async fn run_with_clients_and_log_level<W>(
     terminal_client: &dyn TerminalClient,
     hardware_client: Box<dyn HardwareClient>,
     log_level: Option<LogLevel>,
+    output_format: OutputFormat,
 ) -> Result<()>
 where
     W: io::Write,
@@ -274,14 +289,20 @@ where
         "idm",
         terminal_client.stderr_is_terminal(),
         log_level.map(LogLevel::as_level_filter),
+        output_format,
     )?;
 
     match command {
-        Command::Inspect => crate::cli::inspect::run(hardware_client, out, terminal_client).await,
-        Command::Listen(args) => {
-            crate::cli::listen::run(hardware_client, &args, out, terminal_client).await
+        Command::Inspect => {
+            crate::cli::inspect::run(hardware_client, out, terminal_client, output_format).await
         }
-        Command::Control(args) => crate::cli::control::run(hardware_client, &args, out).await,
+        Command::Listen(args) => {
+            crate::cli::listen::run(hardware_client, &args, out, terminal_client, output_format)
+                .await
+        }
+        Command::Control(args) => {
+            crate::cli::control::run(hardware_client, &args, out, output_format).await
+        }
     }
 }
 

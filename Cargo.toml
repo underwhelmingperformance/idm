@@ -13,12 +13,16 @@ crc32fast = "1.5.0"
 derive_more = { version = "2.1.1", features = ["display", "from", "into"] }
 directories = "6.0.0"
 font8x8 = "0.3.1"
+hex = "0.4.3"
 humantime = "2.3.0"
 idm-macros = { version = "0.1.0", path = "idm-macros" }
 indicatif = "0.18.3"
 opentelemetry = "0.31.0"
 opentelemetry_sdk = "0.31.0"
 owo-colors = "4.2.3"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.149"
+serde_with = { version = "3.16.1", features = ["hex"] }
 strum = "0.27.2"
 strum_macros = "0.27.2"
 tabled = { version = "0.20.0", features = ["ansi"] }

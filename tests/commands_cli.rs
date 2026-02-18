@@ -26,7 +26,14 @@ async fn run_with_parsed_args(args: idm::Args) -> anyhow::Result<String> {
         Some(fake_args) => idm::fake_hardware_client(fake_args),
         None => idm::real_hardware_client_with_model_resolution(model_resolution),
     };
-    idm::run_with_clients(command, &mut output, &FakeTerminalClient, hardware_client).await?;
+    idm::run_with_clients(
+        command,
+        &mut output,
+        &FakeTerminalClient,
+        hardware_client,
+        idm::OutputFormat::Pretty,
+    )
+    .await?;
     Ok(String::from_utf8(output)?)
 }
 

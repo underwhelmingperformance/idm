@@ -16,7 +16,7 @@ pub use app::{
 };
 pub use cli::{
     Args, BrightnessArgs, ColourArgs, Command, ControlAction, ControlArgs, FakeArgs, ListenArgs,
-    LogLevel, PowerArgs, PowerState, SyncTimeArgs, TextArgs,
+    LogLevel, OutputFormat, PowerArgs, PowerState, SyncTimeArgs, TextArgs,
 };
 pub use error::{FixtureError, InteractionError, ProtocolError};
 pub use handlers::{

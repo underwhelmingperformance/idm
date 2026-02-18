@@ -1,10 +1,12 @@
 use derive_more::Display;
+use serde::Serialize;
+use serde_with::SerializeDisplay;
 
 use super::scan_capabilities::ScanCapabilityTable;
 use super::scan_model::{ScanIdentity, ScanModelHandler};
 
 /// Typed text encoder path selected for a resolved LED type.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Display)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Display, SerializeDisplay)]
 pub enum TextPath {
     /// `sendTextTo832`.
     #[display("path_8x32")]
@@ -37,7 +39,7 @@ pub(crate) struct DeviceRoutingProfile {
 }
 
 /// Parsed `Get LED type` (`04 00 01 80`) response fields.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize)]
 pub struct LedInfoResponse {
     /// MCU major version byte.
     pub mcu_major_version: u8,

@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 use std::fmt::Display;
 
+use serde::Serialize;
+use serde_with::{hex::Hex, serde_as};
+
 use crate::protocol::EndpointId;
 
 use super::DeviceProfile;
@@ -9,7 +12,7 @@ use super::scan_model::{ModelProfile, ScanIdentity};
 use super::session::GattProfile;
 
 /// A discovered BLE peripheral that matched a scan predicate.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize)]
 pub struct FoundDevice {
     adapter_name: String,
     device_id: DeviceId,
@@ -19,8 +22,9 @@ pub struct FoundDevice {
     model_profile: Option<ModelProfile>,
 }
 
-#[derive(Debug, Clone, Eq, PartialEq, derive_more::Display)]
+#[derive(Debug, Clone, Eq, PartialEq, derive_more::Display, Serialize)]
 #[display("{}", _0)]
+#[serde(transparent)]
 struct DeviceId(String);
 
 impl DeviceId {
@@ -110,7 +114,7 @@ impl FoundDevice {
 }
 
 /// A characteristic description discovered on a connected peripheral.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize)]
 pub struct CharacteristicInfo {
     uuid: String,
     properties: Vec<String>,
@@ -136,7 +140,7 @@ impl CharacteristicInfo {
 }
 
 /// A GATT service with discovered characteristics.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize)]
 pub struct ServiceInfo {
     uuid: String,
     primary: bool,
@@ -177,7 +181,7 @@ impl ServiceInfo {
 }
 
 /// Presence flags for the reverse-engineered iDotMatrix endpoints.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize)]
 pub struct EndpointPresence {
     by_endpoint: HashMap<EndpointId, bool>,
 }
@@ -232,7 +236,7 @@ pub(crate) enum ScreenLightQueryOutcome {
 }
 
 /// Connection metadata discovered during session setup.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize)]
 pub struct SessionMetadata {
     required_endpoints_verified: bool,
     write_without_response_limit: Option<usize>,
@@ -315,7 +319,7 @@ impl SessionMetadata {
 }
 
 /// Result of inspecting a connected iDotMatrix peripheral.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize)]
 pub struct InspectReport {
     device: FoundDevice,
     services: Vec<ServiceInfo>,
@@ -365,7 +369,8 @@ impl InspectReport {
 }
 
 /// Why a listening session ended.
-#[derive(Debug, Clone, Eq, PartialEq, derive_more::Display)]
+#[derive(Debug, Clone, Eq, PartialEq, derive_more::Display, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ListenStopReason {
     /// The listener reached the requested max notification count.
     #[display("reached max notifications ({_0})")]
@@ -379,7 +384,7 @@ pub enum ListenStopReason {
 }
 
 /// Summary of a notification stream run.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Serialize)]
 pub struct NotificationRunSummary {
     received_notifications: usize,
     stop_reason: ListenStopReason,
@@ -408,9 +413,11 @@ impl NotificationRunSummary {
 }
 
 /// Summary returned when a listen session exits.
-#[derive(Debug, Eq, PartialEq)]
+#[serde_as]
+#[derive(Debug, Eq, PartialEq, Serialize)]
 pub struct ListenSummary {
     device: FoundDevice,
+    #[serde_as(as = "Option<Hex>")]
     initial_read: Option<Vec<u8>>,
     received_notifications: usize,
     stop_reason: ListenStopReason,

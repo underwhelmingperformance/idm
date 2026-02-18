@@ -1,5 +1,7 @@
+use serde::Serialize;
+
 /// Parsed device identity from manufacturer advertisement data.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize)]
 pub struct ScanIdentity {
     /// Vendor identifier byte.
     pub cid: u8,
@@ -20,7 +22,8 @@ pub struct ScanIdentity {
 }
 
 /// Ambiguous model families that require a user-selected LED type.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AmbiguousShape {
     /// Shape byte `0x81`.
     Shape81,
@@ -31,7 +34,7 @@ pub enum AmbiguousShape {
 }
 
 /// Capability hints inferred from scan identity fields.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize)]
 pub struct ModelProfile {
     /// Provisional LED type, when the shape maps directly.
     pub led_type: Option<u8>,
