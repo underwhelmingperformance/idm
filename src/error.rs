@@ -1,7 +1,9 @@
 use derive_more::From;
 use thiserror::Error;
 
-use crate::handlers::{BrightnessError, FrameCodecError, GifUploadError, TextUploadError};
+use crate::handlers::{
+    BrightnessError, FrameCodecError, GifUploadError, ImageUploadError, TextUploadError,
+};
 use crate::notification::NotificationDecodeError;
 use crate::protocol::{EndpointId, endpoint_metadata};
 
@@ -89,6 +91,9 @@ pub enum ProtocolError {
     #[error(transparent)]
     #[from(GifUploadError, Box<GifUploadError>)]
     GifUpload(Box<GifUploadError>),
+    #[error(transparent)]
+    #[from(ImageUploadError, Box<ImageUploadError>)]
+    ImageUpload(Box<ImageUploadError>),
     #[error(transparent)]
     #[from(InteractionError, Box<InteractionError>)]
     Interaction(Box<InteractionError>),

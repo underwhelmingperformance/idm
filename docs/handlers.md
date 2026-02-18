@@ -342,8 +342,10 @@ Behaviour:
 
 ## Image Upload Handler (Non-DIY)
 
-Status: `TODO`  
-Priority: `P1`
+Status: `DONE`  
+Priority: `P1`  
+Comment: Implemented with 4K logical chunking, CRC32 framing, notify ACK pacing,
+and type-safe RGB888 payload validation bound to active panel dimensions.
 
 Protocol references:
 
@@ -356,8 +358,9 @@ Protocol references:
 Behaviour:
 
 - Support image family (`0x02`) 16-byte header upload flow.
-- Accept RGB888 framebuffer payloads only (`width * height * 3`).
-- Reject payloads whose byte length does not match active panel geometry.
+- Accept RGB888 framebuffer payloads only (`width * height * 3`) via typed
+  `Rgb888Frame` construction.
+- Reject payloads whose frame dimensions do not match active panel geometry.
 - Keep file/container decoding and resize/rotation outside this handler.
 - Align tail/profile bytes to target firmware behaviour.
 - Reuse chunker and flow-control primitives from GIF handler.

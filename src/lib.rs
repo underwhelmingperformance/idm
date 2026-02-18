@@ -3,6 +3,7 @@ mod cli;
 mod error;
 mod handlers;
 mod hw;
+mod media;
 mod notification;
 mod protocol;
 mod telemetry;
@@ -22,7 +23,8 @@ pub use error::{FixtureError, InteractionError, ProtocolError};
 pub use handlers::{
     Brightness, BrightnessError, BrightnessHandler, DiyPrefixFields, FrameCodec, FrameCodecError,
     FullscreenColourHandler, GifChunkFlag, GifHeaderFields, GifUploadError, GifUploadHandler,
-    GifUploadReceipt, GifUploadRequest, OtaChunkHeaderFields, PowerHandler, Rgb, ScreenPower,
+    GifUploadReceipt, GifUploadRequest, ImageHeaderFields, ImageUploadError, ImageUploadHandler,
+    ImageUploadReceipt, ImageUploadRequest, OtaChunkHeaderFields, PowerHandler, Rgb, ScreenPower,
     ShortFrame, TextHeaderFields, TextOptions, TextUploadError, TextUploadHandler,
     TextUploadRequest, TimeSyncHandler, UploadPacing, UploadReceipt,
 };
@@ -33,6 +35,7 @@ pub use hw::{
     NotificationRunSummary, PanelDimensions, PanelSize, ScanIdentity, ScanModelHandler,
     ServiceInfo, SessionMetadata, TextPath, WriteMode,
 };
+pub use media::{Rgb888Frame, Rgb888FrameError};
 pub use notification::{NotificationDecodeError, NotificationHandler, NotifyEvent, TransferFamily};
 pub use protocol::EndpointId;
 pub use terminal::TerminalClient;

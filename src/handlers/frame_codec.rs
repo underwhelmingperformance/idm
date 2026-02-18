@@ -217,6 +217,65 @@ impl GifHeaderFields {
     }
 }
 
+/// Fields used when encoding an image upload header.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct ImageHeaderFields {
+    chunk_payload_len: u16,
+    chunk_flag: GifChunkFlag,
+    payload_len: u32,
+    crc32: u32,
+}
+
+impl ImageHeaderFields {
+    /// Creates image-header fields.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `chunk_payload_len` cannot fit in a 16-byte framed block.
+    ///
+    /// ```
+    /// use idm::{GifChunkFlag, ImageHeaderFields};
+    ///
+    /// let fields = ImageHeaderFields::new(4096, GifChunkFlag::First, 8192, 0xDEADBEEF)?;
+    /// assert_eq!(4096, fields.chunk_payload_len());
+    /// # Ok::<(), idm::FrameCodecError>(())
+    /// ```
+    pub fn new(
+        chunk_payload_len: u16,
+        chunk_flag: GifChunkFlag,
+        payload_len: u32,
+        crc32: u32,
+    ) -> Result<Self, FrameCodecError> {
+        if chunk_payload_len > HEADER_MAX_PAYLOAD_LEN {
+            return Err(FrameCodecError::HeaderPayloadTooLarge {
+                payload_len: chunk_payload_len,
+                max_payload_len: HEADER_MAX_PAYLOAD_LEN,
+            });
+        }
+
+        Ok(Self {
+            chunk_payload_len,
+            chunk_flag,
+            payload_len,
+            crc32,
+        })
+    }
+
+    /// Returns the payload byte count for this frame block.
+    ///
+    /// ```
+    /// use idm::{GifChunkFlag, ImageHeaderFields};
+    ///
+    /// let fields = ImageHeaderFields::new(2048, GifChunkFlag::Continuation, 4096, 0)?;
+    /// assert_eq!(2048, fields.chunk_payload_len());
+    /// # Ok::<(), idm::FrameCodecError>(())
+    /// ```
+    #[must_use]
+    pub fn chunk_payload_len(&self) -> u16 {
+        self.chunk_payload_len
+    }
+}
+
 /// Fields used when encoding a DIY 9-byte transfer prefix.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct DiyPrefixFields {
@@ -488,6 +547,36 @@ impl FrameCodec {
         header
     }
 
+    /// Encodes a 16-byte image header.
+    ///
+    /// ```
+    /// use idm::{FrameCodec, GifChunkFlag, ImageHeaderFields};
+    ///
+    /// let fields = ImageHeaderFields::new(0x1000, GifChunkFlag::Continuation, 0x0000_2000, 0x1122_3344)?;
+    /// let header = FrameCodec::encode_image_header(fields);
+    /// assert_eq!(
+    ///     [0x10, 0x10, 0x02, 0x00, 0x02, 0x00, 0x20, 0x00, 0x00, 0x44, 0x33, 0x22, 0x11, 0x05, 0x00, 0x0D],
+    ///     header
+    /// );
+    /// # Ok::<(), idm::FrameCodecError>(())
+    /// ```
+    #[must_use]
+    pub fn encode_image_header(fields: ImageHeaderFields) -> [u8; 16] {
+        let mut header = [0u8; 16];
+        let block_len = HEADER_LEN + fields.chunk_payload_len;
+
+        header[0..2].copy_from_slice(&block_len.to_le_bytes());
+        header[2] = 0x02;
+        header[3] = 0x00;
+        header[4] = fields.chunk_flag.as_protocol_byte();
+        header[5..9].copy_from_slice(&fields.payload_len.to_le_bytes());
+        header[9..13].copy_from_slice(&fields.crc32.to_le_bytes());
+        header[13] = 0x05;
+        header[14] = 0x00;
+        header[15] = 0x0D;
+        header
+    }
+
     /// Encodes a 9-byte DIY upload prefix.
     ///
     /// ```
@@ -635,6 +724,21 @@ mod tests {
         assert_eq!(
             [
                 0xC9, 0x08, 0x01, 0x00, 0x02, 0xB9, 0x18, 0x00, 0x00, 0xDB, 0x42, 0xCB, 0x14, 0x05,
+                0x00, 0x0D,
+            ],
+            header
+        );
+    }
+
+    #[test]
+    fn encode_image_header_matches_expected_bytes() {
+        let fields =
+            ImageHeaderFields::new(0x1000, GifChunkFlag::Continuation, 0x0000_2000, 0x1122_3344)
+                .expect("captured image values should construct");
+        let header = FrameCodec::encode_image_header(fields);
+        assert_eq!(
+            [
+                0x10, 0x10, 0x02, 0x00, 0x02, 0x00, 0x20, 0x00, 0x00, 0x44, 0x33, 0x22, 0x11, 0x05,
                 0x00, 0x0D,
             ],
             header
