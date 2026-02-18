@@ -322,9 +322,9 @@ Behaviour:
 ## GIF Upload Handler
 
 Status: `DONE`  
-Priority: `P0`
-Comment: Implemented with 4K logical chunking, CRC32 framing, notify ACK pacing,
-cache-hit short-circuit behaviour, and CLI wiring via `idm control gif`.
+Priority: `P0` Comment: Implemented with 4K logical chunking, CRC32 framing,
+notify ACK pacing, cache-hit short-circuit behaviour, and CLI wiring via
+`idm control gif`.
 
 Protocol references:
 
@@ -348,6 +348,7 @@ Priority: `P1`
 Protocol references:
 
 - [Image upload (non-DIY)](protocol.md#image-upload-non-diy)
+- [Display-intent payload semantics](protocol.md#display-intent-payload-semantics)
 - [Shared media tail byte pattern](protocol.md#shared-media-tail-byte-pattern-gif-image-text)
 - [Transfer family ACK patterns](protocol.md#transfer-family-ack-patterns)
   (Image)
@@ -355,6 +356,9 @@ Protocol references:
 Behaviour:
 
 - Support image family (`0x02`) 16-byte header upload flow.
+- Accept RGB888 framebuffer payloads only (`width * height * 3`).
+- Reject payloads whose byte length does not match active panel geometry.
+- Keep file/container decoding and resize/rotation outside this handler.
 - Align tail/profile bytes to target firmware behaviour.
 - Reuse chunker and flow-control primitives from GIF handler.
 
@@ -366,13 +370,15 @@ Priority: `P1`
 Protocol references:
 
 - [DIY raw RGB upload](protocol.md#diy-raw-rgb-upload)
+- [Display-intent payload semantics](protocol.md#display-intent-payload-semantics)
 - [DIY raw-image frame](protocol.md#diy-raw-image-frame-9-byte-header)
 - [Transfer family ACK patterns](protocol.md#transfer-family-ack-patterns) (DIY)
 
 Behaviour:
 
 - Switch to DIY mode before transfer.
-- Upload RGB payload with 9-byte DIY per-chunk prefix.
+- Upload RGB888 framebuffer payload with 9-byte DIY per-chunk prefix.
+- Reject payloads whose byte length does not match active panel geometry.
 - Support mode reset/exit behaviour after completion.
 
 ## Clock Style Handler

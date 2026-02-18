@@ -841,10 +841,24 @@ The duration value comes from `DeviceMaterialTimeConvert.ConvertTime(timeSign)`:
 
 The time sign is a user preference stored per material slot.
 
+### Display-intent payload semantics
+
+For static image display uploads, clients SHOULD treat both `image` and bulk
+`DIY` payloads as RGB888 framebuffers:
+
+- Byte layout per pixel: `[R, G, B]`.
+- Pixel order: row-major, top-to-bottom then left-to-right.
+- Expected payload length: `panel_width * panel_height * 3`.
+
+Before payload encoding, clients SHOULD normalise source media to panel geometry
+(resize/crop and EXIF rotation) and then convert the normalised bitmap into the
+RGB888 stream above.
+
 ### Image upload (non-DIY)
 
 - Uses the same 16-byte framing shape as GIF/text.
 - `family=0x02`.
+- Display-intent payload SHOULD be RGB888 framebuffer bytes as defined above.
 - CRC and total length are carried in header bytes `[5..12]`.
 - Tail bytes follow the
   [shared media tail pattern](#shared-media-tail-byte-pattern-gif-image-text).
@@ -852,7 +866,7 @@ The time sign is a user preference stored per material slot.
 ### DIY raw RGB upload
 
 - Mode switch command sent before transfer (`05 00 04 01 01`).
-- Payload is panel-sized RGB data.
+- Bulk payload uses the same RGB888 framebuffer layout as image upload.
 - Split payload into `4096`-byte chunks.
 - Prefix each chunk with 9-byte DIY header.
 
@@ -1016,15 +1030,15 @@ verification method rather than the standard `[1..4]` dispatch.
 
 ### Family dispatch summary
 
-| Family   | `[1]`                                               | `[2]`  | `[3]`  | Status byte |
-| -------- | --------------------------------------------------- | ------ | ------ | ----------- |
-| Text     | `0x00`                                              | `0x03` | `0x00` | `[4]`       |
-| GIF      | `0x00`                                              | `0x01` | `0x00` | `[4]`       |
-| Image    | `0x00`                                              | `0x02` | `0x00` | `[4]`       |
-| DIY      | `0x00`                                              | `0x00` | `0x00` | `[4]`       |
-| Timer    | `0x00`                                              | `0x00` | `0x80` | `[4]`       |
-| OTA      | `0x00`                                              | `0x01` | `0xC0` | `[4]`       |
-| Schedule | checks `[0]=0x05`, `[2]=0x05` or `0x07`, `[3]=0x80` |
+| Family   | `[1]`  | `[2]`            | `[3]`  | Status byte |
+| -------- | ------ | ---------------- | ------ | ----------- |
+| Text     | `0x00` | `0x03`           | `0x00` | `[4]`       |
+| GIF      | `0x00` | `0x01`           | `0x00` | `[4]`       |
+| Image    | `0x00` | `0x02`           | `0x00` | `[4]`       |
+| DIY      | `0x00` | `0x00`           | `0x00` | `[4]`       |
+| Timer    | `0x00` | `0x00`           | `0x80` | `[4]`       |
+| OTA      | `0x00` | `0x01`           | `0xC0` | `[4]`       |
+| Schedule | `0x00` | `0x05` or `0x07` | `0x80` | `[4]`       |
 
 Implementations SHOULD parse responses by command family rather than one
 universal ACK map.
