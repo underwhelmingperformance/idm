@@ -69,8 +69,8 @@ not generic BLE validation.
 - lamp count: `[12,11]`
 - lamp num: `[14,13]`
 
-Each extractor validates only the offset it needs, so shape/CID/PID can still
-be read when trailing lamp bytes are missing in truncated manufacturer values.
+Each extractor validates only the offset it needs, so shape/CID/PID can still be
+read when trailing lamp bytes are missing in truncated manufacturer values.
 
 ## 3) Blue filter semantics are exclusionary
 

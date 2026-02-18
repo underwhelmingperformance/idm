@@ -7,7 +7,7 @@ implement, in priority order, with API shape and behaviour expectations.
 ## Session Handler
 
 Status: `DONE`  
-Priority: `P0`  
+Priority: `P0`
 
 Protocol references:
 
@@ -159,7 +159,7 @@ impl DeviceProfileResolver {
 ## Notification Handler
 
 Status: `DONE`  
-Priority: `P0`  
+Priority: `P0`
 
 Protocol references:
 
@@ -210,7 +210,7 @@ impl NotificationHandler {
 ## Frame Codec Handler
 
 Status: `DONE`  
-Priority: `P0`  
+Priority: `P0`
 
 Protocol references:
 
@@ -301,7 +301,7 @@ Behaviour:
 ## Text Upload Handler
 
 Status: `DONE`  
-Priority: `P0`  
+Priority: `P0`
 
 Protocol references:
 
