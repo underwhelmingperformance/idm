@@ -324,7 +324,8 @@ Behaviour:
 Status: `DONE`  
 Priority: `P0` Comment: Implemented with 4K logical chunking, CRC32 framing,
 notify ACK pacing, cache-hit short-circuit behaviour, and CLI wiring via
-`idm control gif`.
+`idm control gif`. Input is now type-validated as GIF bytes with parsed logical
+dimensions before transfer begins.
 
 Protocol references:
 
@@ -336,6 +337,9 @@ Behaviour:
 
 - Chunk raw GIF bytes at `4096` protocol chunk size.
 - Emit 16-byte GIF headers with proper flags/CRC/tail profile.
+- Accept only syntactically valid GIF payloads via typed `GifAnimation`.
+- When device panel dimensions are known, reject GIFs whose logical screen
+  dimensions differ.
 - Use notification-driven flow control.
 - Drain stale notify events before upload to reduce cross-command ACK bleed.
 - CLI wired: `idm control gif <gif_file>`.

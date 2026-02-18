@@ -212,7 +212,15 @@ async fn control_gif_command_uploads_payload() -> anyhow::Result<()> {
         "idm-control-gif-cli-{}-{timestamp}.gif",
         std::process::id()
     ));
-    std::fs::write(&file_path, [0x47, 0x49, 0x46, 0x38, 0x39, 0x61])?;
+    std::fs::write(
+        &file_path,
+        [
+            0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x21, 0xF9, 0x04, 0x01, 0x00, 0x00, 0x00, 0x00, 0x2C,
+            0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x44, 0x01, 0x00,
+            0x3B,
+        ],
+    )?;
 
     let file_path_string = file_path.to_string_lossy().to_string();
     let stdout = run_with_argv([
@@ -229,7 +237,7 @@ async fn control_gif_command_uploads_payload() -> anyhow::Result<()> {
     .await?;
 
     assert_eq!(
-        "Uploaded GIF payload: 22 bytes in 1 chunk(s) across 1 logical chunk(s)",
+        "Uploaded GIF payload: 59 bytes in 1 chunk(s) across 1 logical chunk(s)",
         stdout.trim_end()
     );
 

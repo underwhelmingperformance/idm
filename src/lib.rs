@@ -35,7 +35,7 @@ pub use hw::{
     NotificationRunSummary, PanelDimensions, PanelSize, ScanIdentity, ScanModelHandler,
     ServiceInfo, SessionMetadata, TextPath, WriteMode,
 };
-pub use media::{Rgb888Frame, Rgb888FrameError};
+pub use media::{GifAnimation, GifAnimationError, Rgb888Frame, Rgb888FrameError};
 pub use notification::{NotificationDecodeError, NotificationHandler, NotifyEvent, TransferFamily};
 pub use protocol::EndpointId;
 pub use terminal::TerminalClient;

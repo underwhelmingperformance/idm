@@ -11,9 +11,9 @@ use tracing::instrument;
 use crate::cli::OutputFormat;
 use crate::hw::HardwareClient;
 use crate::{
-    Brightness, BrightnessHandler, FullscreenColourHandler, GifUploadHandler, GifUploadRequest,
-    PowerHandler, Rgb, ScreenPower, SessionHandler, TextOptions, TextUploadHandler,
-    TextUploadRequest, TimeSyncHandler, UploadPacing,
+    Brightness, BrightnessHandler, FullscreenColourHandler, GifAnimation, GifUploadHandler,
+    GifUploadRequest, PowerHandler, Rgb, ScreenPower, SessionHandler, TextOptions,
+    TextUploadHandler, TextUploadRequest, TimeSyncHandler, UploadPacing,
 };
 
 /// JSON result emitted by a `control` action.
@@ -503,7 +503,9 @@ fn default_cli_text_request(text: &str) -> TextUploadRequest {
 fn default_cli_gif_request(path: &Path) -> Result<GifUploadRequest> {
     let payload = std::fs::read(path)
         .with_context(|| format!("failed to read GIF file `{}`", path.display()))?;
-    Ok(GifUploadRequest::new(payload)
+    let gif = GifAnimation::try_from(payload)
+        .with_context(|| format!("failed to decode GIF file `{}`", path.display()))?;
+    Ok(GifUploadRequest::new(gif)
         .with_per_fragment_delay(Duration::from_millis(20))
         .with_ack_timeout(Duration::from_secs(5)))
 }
@@ -545,14 +547,21 @@ mod tests {
             "idm-control-gif-{}-{timestamp}.gif",
             std::process::id()
         ));
-        let expected_payload = vec![0x47, 0x49, 0x46, 0x38, 0x39, 0x61];
+        let expected_payload = vec![
+            0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x21, 0xF9, 0x04, 0x01, 0x00, 0x00, 0x00, 0x00, 0x2C,
+            0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x44, 0x01, 0x00,
+            0x3B,
+        ];
         std::fs::write(&file_path, &expected_payload)
             .with_context(|| format!("failed to write temporary file `{}`", file_path.display()))?;
 
         let request = default_cli_gif_request(&file_path)?;
-        let expected = GifUploadRequest::new(expected_payload)
-            .with_per_fragment_delay(Duration::from_millis(20))
-            .with_ack_timeout(Duration::from_secs(5));
+        let expected = GifUploadRequest::new(
+            GifAnimation::try_from(expected_payload).expect("test gif payload should decode"),
+        )
+        .with_per_fragment_delay(Duration::from_millis(20))
+        .with_ack_timeout(Duration::from_secs(5));
 
         assert_eq!(expected, request);
         std::fs::remove_file(&file_path).with_context(|| {

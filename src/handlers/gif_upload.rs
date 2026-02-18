@@ -6,11 +6,11 @@ use tokio::time::{sleep, timeout};
 use tracing::instrument;
 
 use crate::error::ProtocolError;
-use crate::hw::{DeviceSession, GifHeaderProfile, WriteMode};
+use crate::hw::{DeviceSession, GifHeaderProfile, PanelDimensions, WriteMode};
 use crate::protocol::EndpointId;
 use crate::{
-    FrameCodec, GifChunkFlag, GifHeaderFields, NotificationDecodeError, NotificationHandler,
-    NotifyEvent, TransferFamily,
+    FrameCodec, GifAnimation, GifChunkFlag, GifHeaderFields, NotificationDecodeError,
+    NotificationHandler, NotifyEvent, TransferFamily,
 };
 
 const LOGICAL_CHUNK_SIZE: usize = 4096;
@@ -23,12 +23,17 @@ const UNUSABLE_WRITE_WITHOUT_RESPONSE_LIMIT: usize = 20;
 /// Errors returned by GIF upload operations.
 #[derive(Debug, Error)]
 pub enum GifUploadError {
-    #[error("gif upload payload cannot be empty")]
-    EmptyPayload,
     #[error("gif upload payload is too large: {payload_len} bytes exceeds max {max_payload_len}")]
     PayloadTooLarge {
         payload_len: usize,
         max_payload_len: usize,
+    },
+    #[error(
+        "gif upload dimensions {gif_dimensions} do not match device panel dimensions {device_dimensions}"
+    )]
+    PanelDimensionsMismatch {
+        gif_dimensions: PanelDimensions,
+        device_dimensions: PanelDimensions,
     },
     #[error(
         "gif logical chunk payload is too large: {chunk_payload_len} bytes exceeds max {max_payload_len}"
@@ -61,7 +66,7 @@ pub enum GifUploadError {
 /// GIF upload request parameters.
 #[derive(Debug, Clone, Eq, PartialEq)]
 pub struct GifUploadRequest {
-    payload: Vec<u8>,
+    gif: GifAnimation,
     per_fragment_delay: Duration,
     ack_timeout: Duration,
 }
@@ -70,15 +75,24 @@ impl GifUploadRequest {
     /// Creates a GIF upload request using default pacing.
     ///
     /// ```
-    /// use idm::GifUploadRequest;
+    /// use idm::{GifAnimation, GifUploadRequest};
     ///
-    /// let request = GifUploadRequest::new([0x47, 0x49, 0x46]);
-    /// assert_eq!(&[0x47, 0x49, 0x46], request.payload());
+    /// # fn tiny_gif() -> Vec<u8> {
+    /// #     vec![
+    /// #         0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00,
+    /// #         0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x21, 0xF9, 0x04, 0x01, 0x00,
+    /// #         0x00, 0x00, 0x00, 0x2C, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
+    /// #         0x00, 0x02, 0x02, 0x44, 0x01, 0x00, 0x3B,
+    /// #     ]
+    /// # }
+    /// let gif = GifAnimation::try_from(tiny_gif()).expect("test gif should decode");
+    /// let request = GifUploadRequest::new(gif);
+    /// assert_eq!(43, request.payload().len());
     /// ```
     #[must_use]
-    pub fn new(payload: impl Into<Vec<u8>>) -> Self {
+    pub fn new(gif: GifAnimation) -> Self {
         Self {
-            payload: payload.into(),
+            gif,
             per_fragment_delay: DEFAULT_PER_FRAGMENT_DELAY,
             ack_timeout: DEFAULT_NOTIFY_ACK_TIMEOUT,
         }
@@ -89,9 +103,18 @@ impl GifUploadRequest {
     /// ```
     /// use std::time::Duration;
     ///
-    /// use idm::GifUploadRequest;
+    /// use idm::{GifAnimation, GifUploadRequest};
     ///
-    /// let request = GifUploadRequest::new([0x01]).with_per_fragment_delay(Duration::ZERO);
+    /// # fn tiny_gif() -> Vec<u8> {
+    /// #     vec![
+    /// #         0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00,
+    /// #         0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x21, 0xF9, 0x04, 0x01, 0x00,
+    /// #         0x00, 0x00, 0x00, 0x2C, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
+    /// #         0x00, 0x02, 0x02, 0x44, 0x01, 0x00, 0x3B,
+    /// #     ]
+    /// # }
+    /// let gif = GifAnimation::try_from(tiny_gif()).expect("test gif should decode");
+    /// let request = GifUploadRequest::new(gif).with_per_fragment_delay(Duration::ZERO);
     /// assert_eq!(Duration::ZERO, request.per_fragment_delay());
     /// ```
     #[must_use]
@@ -105,9 +128,18 @@ impl GifUploadRequest {
     /// ```
     /// use std::time::Duration;
     ///
-    /// use idm::GifUploadRequest;
+    /// use idm::{GifAnimation, GifUploadRequest};
     ///
-    /// let request = GifUploadRequest::new([0x01]).with_ack_timeout(Duration::from_millis(250));
+    /// # fn tiny_gif() -> Vec<u8> {
+    /// #     vec![
+    /// #         0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00,
+    /// #         0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x21, 0xF9, 0x04, 0x01, 0x00,
+    /// #         0x00, 0x00, 0x00, 0x2C, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
+    /// #         0x00, 0x02, 0x02, 0x44, 0x01, 0x00, 0x3B,
+    /// #     ]
+    /// # }
+    /// let gif = GifAnimation::try_from(tiny_gif()).expect("test gif should decode");
+    /// let request = GifUploadRequest::new(gif).with_ack_timeout(Duration::from_millis(250));
     /// assert_eq!(Duration::from_millis(250), request.ack_timeout());
     /// ```
     #[must_use]
@@ -119,14 +151,45 @@ impl GifUploadRequest {
     /// Returns the raw GIF payload bytes.
     ///
     /// ```
-    /// use idm::GifUploadRequest;
+    /// use idm::{GifAnimation, GifUploadRequest};
     ///
-    /// let request = GifUploadRequest::new([0x47, 0x49, 0x46]);
-    /// assert_eq!(&[0x47, 0x49, 0x46], request.payload());
+    /// # fn tiny_gif() -> Vec<u8> {
+    /// #     vec![
+    /// #         0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00,
+    /// #         0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x21, 0xF9, 0x04, 0x01, 0x00,
+    /// #         0x00, 0x00, 0x00, 0x2C, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
+    /// #         0x00, 0x02, 0x02, 0x44, 0x01, 0x00, 0x3B,
+    /// #     ]
+    /// # }
+    /// let gif = GifAnimation::try_from(tiny_gif()).expect("test gif should decode");
+    /// let request = GifUploadRequest::new(gif);
+    /// assert_eq!(43, request.payload().len());
     /// ```
     #[must_use]
     pub fn payload(&self) -> &[u8] {
-        &self.payload
+        self.gif.payload()
+    }
+
+    /// Returns the validated GIF payload and metadata.
+    ///
+    /// ```
+    /// use idm::{GifAnimation, GifUploadRequest};
+    ///
+    /// # fn tiny_gif() -> Vec<u8> {
+    /// #     vec![
+    /// #         0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00,
+    /// #         0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x21, 0xF9, 0x04, 0x01, 0x00,
+    /// #         0x00, 0x00, 0x00, 0x2C, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
+    /// #         0x00, 0x02, 0x02, 0x44, 0x01, 0x00, 0x3B,
+    /// #     ]
+    /// # }
+    /// let gif = GifAnimation::try_from(tiny_gif()).expect("test gif should decode");
+    /// let request = GifUploadRequest::new(gif.clone());
+    /// assert_eq!(gif, request.gif().clone());
+    /// ```
+    #[must_use]
+    pub fn gif(&self) -> &GifAnimation {
+        &self.gif
     }
 
     /// Returns the configured transport-fragment delay.
@@ -134,9 +197,18 @@ impl GifUploadRequest {
     /// ```
     /// use std::time::Duration;
     ///
-    /// use idm::GifUploadRequest;
+    /// use idm::{GifAnimation, GifUploadRequest};
     ///
-    /// let request = GifUploadRequest::new([0x01]);
+    /// # fn tiny_gif() -> Vec<u8> {
+    /// #     vec![
+    /// #         0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00,
+    /// #         0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x21, 0xF9, 0x04, 0x01, 0x00,
+    /// #         0x00, 0x00, 0x00, 0x2C, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
+    /// #         0x00, 0x02, 0x02, 0x44, 0x01, 0x00, 0x3B,
+    /// #     ]
+    /// # }
+    /// let gif = GifAnimation::try_from(tiny_gif()).expect("test gif should decode");
+    /// let request = GifUploadRequest::new(gif);
     /// assert_eq!(Duration::from_millis(20), request.per_fragment_delay());
     /// ```
     #[must_use]
@@ -149,9 +221,18 @@ impl GifUploadRequest {
     /// ```
     /// use std::time::Duration;
     ///
-    /// use idm::GifUploadRequest;
+    /// use idm::{GifAnimation, GifUploadRequest};
     ///
-    /// let request = GifUploadRequest::new([0x01]);
+    /// # fn tiny_gif() -> Vec<u8> {
+    /// #     vec![
+    /// #         0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00,
+    /// #         0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x21, 0xF9, 0x04, 0x01, 0x00,
+    /// #         0x00, 0x00, 0x00, 0x2C, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
+    /// #         0x00, 0x02, 0x02, 0x44, 0x01, 0x00, 0x3B,
+    /// #     ]
+    /// # }
+    /// let gif = GifAnimation::try_from(tiny_gif()).expect("test gif should decode");
+    /// let request = GifUploadRequest::new(gif);
     /// assert_eq!(Duration::from_secs(5), request.ack_timeout());
     /// ```
     #[must_use]
@@ -261,9 +342,18 @@ impl GifUploadHandler {
     ///
     /// ```
     /// # async fn demo(session: idm::DeviceSession) -> Result<(), idm::ProtocolError> {
-    /// use idm::{GifUploadHandler, GifUploadRequest};
+    /// use idm::{GifAnimation, GifUploadHandler, GifUploadRequest};
     ///
-    /// let request = GifUploadRequest::new([0x47, 0x49, 0x46]);
+    /// # fn tiny_gif() -> Vec<u8> {
+    /// #     vec![
+    /// #         0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00,
+    /// #         0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x21, 0xF9, 0x04, 0x01, 0x00,
+    /// #         0x00, 0x00, 0x00, 0x2C, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
+    /// #         0x00, 0x02, 0x02, 0x44, 0x01, 0x00, 0x3B,
+    /// #     ]
+    /// # }
+    /// let gif = GifAnimation::try_from(tiny_gif()).expect("test gif should decode");
+    /// let request = GifUploadRequest::new(gif);
     /// let _receipt = GifUploadHandler::upload(&session, request).await?;
     /// # Ok(())
     /// # }
@@ -278,19 +368,26 @@ impl GifUploadHandler {
         session: &DeviceSession,
         request: GifUploadRequest,
     ) -> Result<GifUploadReceipt, ProtocolError> {
-        if request.payload.is_empty() {
-            return Err(GifUploadError::EmptyPayload.into());
+        if let Some(device_dimensions) = session.device_profile().panel_dimensions() {
+            let gif_dimensions = request.gif().dimensions();
+            if gif_dimensions != device_dimensions {
+                return Err(GifUploadError::PanelDimensionsMismatch {
+                    gif_dimensions,
+                    device_dimensions,
+                }
+                .into());
+            }
         }
 
+        let payload = request.payload();
         let chunk_size = write_chunk_size(session)?;
-        let logical_chunks_total = request.payload.chunks(LOGICAL_CHUNK_SIZE).len();
-        let crc32 = hash(request.payload());
-        let payload_len_u32 = u32::try_from(request.payload.len()).map_err(|_overflow| {
-            GifUploadError::PayloadTooLarge {
-                payload_len: request.payload.len(),
+        let logical_chunks_total = payload.chunks(LOGICAL_CHUNK_SIZE).len();
+        let crc32 = hash(payload);
+        let payload_len_u32 =
+            u32::try_from(payload.len()).map_err(|_overflow| GifUploadError::PayloadTooLarge {
+                payload_len: payload.len(),
                 max_payload_len: u32::MAX as usize,
-            }
-        })?;
+            })?;
         let endpoint = EndpointId::ReadNotifyCharacteristic;
 
         session.subscribe_endpoint(endpoint).await?;
@@ -303,7 +400,7 @@ impl GifUploadHandler {
             let mut logical_chunks_sent = 0usize;
             let mut cached = false;
 
-            for (index, logical_chunk) in request.payload.chunks(LOGICAL_CHUNK_SIZE).enumerate() {
+            for (index, logical_chunk) in payload.chunks(LOGICAL_CHUNK_SIZE).enumerate() {
                 let chunk_flag = if index == 0 {
                     GifChunkFlag::First
                 } else {
@@ -507,11 +604,21 @@ mod tests {
 
     use super::*;
 
+    fn tiny_gif() -> GifAnimation {
+        let payload = vec![
+            0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x21, 0xF9, 0x04, 0x01, 0x00, 0x00, 0x00, 0x00, 0x2C,
+            0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x44, 0x01, 0x00,
+            0x3B,
+        ];
+        GifAnimation::try_from(payload).expect("tiny gif payload should parse")
+    }
+
     #[test]
     fn gif_upload_request_defaults_match_protocol_pacing() {
-        let request = GifUploadRequest::new([0x47, 0x49, 0x46]);
+        let request = GifUploadRequest::new(tiny_gif());
 
-        assert_eq!(&[0x47, 0x49, 0x46], request.payload());
+        assert_eq!(43, request.payload().len());
         assert_eq!(Duration::from_millis(20), request.per_fragment_delay());
         assert_eq!(Duration::from_secs(5), request.ack_timeout());
     }
