@@ -7,8 +7,8 @@ pub(crate) mod ui;
 
 pub use self::command::{Args, Command, FakeArgs, LogLevel, OutputFormat};
 pub use self::control::{
-    BrightnessArgs, ColourArgs, ControlAction, ControlArgs, GifArgs, PowerArgs, PowerState,
-    SyncTimeArgs, TextArgs,
+    BrightnessArgs, ColourArgs, ControlAction, ControlArgs, PowerArgs, PowerState, SyncTimeArgs,
+    TextArgs,
 };
 pub use self::image::ImageArgs;
 pub use self::listen::ListenArgs;

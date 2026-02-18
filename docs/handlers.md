@@ -324,8 +324,8 @@ Behaviour:
 Status: `DONE`  
 Priority: `P0` Comment: Implemented with 4K logical chunking, CRC32 framing,
 notify ACK pacing, cache-hit short-circuit behaviour, and CLI wiring via
-`idm control gif`. Input is now type-validated as GIF bytes with parsed logical
-dimensions before transfer begins.
+`idm image <image_file>`. Input is now type-validated as GIF bytes with parsed
+logical dimensions before transfer begins.
 
 Protocol references:
 
@@ -340,9 +340,10 @@ Behaviour:
 - Accept only syntactically valid GIF payloads via typed `GifAnimation`.
 - When device panel dimensions are known, reject GIFs whose logical screen
   dimensions differ.
+- Top-level `image` command detects GIF input and routes to this handler.
 - Use notification-driven flow control.
 - Drain stale notify events before upload to reduce cross-command ACK bleed.
-- CLI wired: `idm control gif <gif_file>`.
+- CLI wired via top-level `idm image <image_file>`.
 
 ## Image Upload Handler (Non-DIY)
 

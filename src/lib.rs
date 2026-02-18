@@ -16,8 +16,8 @@ pub use app::{
     run_with_clients_and_log_level, run_with_log_level,
 };
 pub use cli::{
-    Args, BrightnessArgs, ColourArgs, Command, ControlAction, ControlArgs, FakeArgs, GifArgs,
-    ImageArgs, ListenArgs, LogLevel, OutputFormat, PowerArgs, PowerState, SyncTimeArgs, TextArgs,
+    Args, BrightnessArgs, ColourArgs, Command, ControlAction, ControlArgs, FakeArgs, ImageArgs,
+    ListenArgs, LogLevel, OutputFormat, PowerArgs, PowerState, SyncTimeArgs, TextArgs,
 };
 pub use error::{FixtureError, InteractionError, ProtocolError};
 pub use handlers::{
@@ -36,8 +36,8 @@ pub use hw::{
     ServiceInfo, SessionMetadata, TextPath, WriteMode,
 };
 pub use media::{
-    GifAnimation, GifAnimationError, ImagePreparationError, ImagePreprocessor, PreparedStillImage,
-    Rgb888Frame, Rgb888FrameError,
+    GifAnimation, GifAnimationError, ImagePreparationError, ImagePreprocessor, PreparedImageUpload,
+    PreparedStillImage, Rgb888Frame, Rgb888FrameError,
 };
 pub use notification::{NotificationDecodeError, NotificationHandler, NotifyEvent, TransferFamily};
 pub use protocol::EndpointId;

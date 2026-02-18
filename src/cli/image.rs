@@ -1,20 +1,24 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use clap::Args;
 use serde::Serialize;
 use tracing::instrument;
 
 use crate::cli::OutputFormat;
 use crate::hw::HardwareClient;
-use crate::{ImagePreprocessor, ImageUploadHandler, ImageUploadRequest, SessionHandler};
+use crate::{
+    GifUploadHandler, GifUploadRequest, ImagePreprocessor, ImageUploadHandler, ImageUploadRequest,
+    PreparedImageUpload, SessionHandler,
+};
 
 /// JSON result emitted by `image` command.
 #[derive(Serialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 enum ImageResult {
     Image {
+        media_type: String,
         bytes_written: usize,
         chunks_written: usize,
         logical_chunks_sent: usize,
@@ -106,34 +110,70 @@ where
         .context("cannot upload image because panel dimensions are unresolved for this device")?;
     let source_bytes = std::fs::read(args.path())
         .with_context(|| format!("failed to read image file `{}`", args.path().display()))?;
-    let prepared = ImagePreprocessor::prepare_still(&source_bytes, panel_dimensions)
+    let prepared = ImagePreprocessor::prepare_for_upload(&source_bytes, panel_dimensions)
         .with_context(|| format!("failed to prepare image file `{}`", args.path().display()))?;
 
-    if prepared.source_format() == image::ImageFormat::Gif {
-        bail!("GIF input is not supported by `image` yet; use `control gif`");
-    }
-
-    let receipt =
-        ImageUploadHandler::upload(session, ImageUploadRequest::new(prepared.into_frame())).await?;
-    match output_format {
-        OutputFormat::Pretty => {
-            writeln!(
-                out,
-                "Uploaded image payload: {} bytes in {} chunk(s) across {} logical chunk(s)",
-                receipt.bytes_written(),
-                receipt.chunks_written(),
-                receipt.logical_chunks_sent(),
-            )?;
+    match prepared {
+        PreparedImageUpload::Still(still) => {
+            let receipt =
+                ImageUploadHandler::upload(session, ImageUploadRequest::new(still.into_frame()))
+                    .await?;
+            match output_format {
+                OutputFormat::Pretty => {
+                    writeln!(
+                        out,
+                        "Uploaded image payload: {} bytes in {} chunk(s) across {} logical chunk(s)",
+                        receipt.bytes_written(),
+                        receipt.chunks_written(),
+                        receipt.logical_chunks_sent(),
+                    )?;
+                }
+                OutputFormat::Json => {
+                    write_json_line(
+                        out,
+                        &ImageResult::Image {
+                            media_type: "image".to_string(),
+                            bytes_written: receipt.bytes_written(),
+                            chunks_written: receipt.chunks_written(),
+                            logical_chunks_sent: receipt.logical_chunks_sent(),
+                        },
+                    )?;
+                }
+            }
         }
-        OutputFormat::Json => {
-            write_json_line(
-                out,
-                &ImageResult::Image {
-                    bytes_written: receipt.bytes_written(),
-                    chunks_written: receipt.chunks_written(),
-                    logical_chunks_sent: receipt.logical_chunks_sent(),
-                },
-            )?;
+        PreparedImageUpload::Gif(gif) => {
+            let receipt = GifUploadHandler::upload(session, GifUploadRequest::new(gif)).await?;
+            match output_format {
+                OutputFormat::Pretty => {
+                    if receipt.cached() {
+                        writeln!(
+                            out,
+                            "Uploaded GIF payload: {} bytes in {} chunk(s); device cache hit",
+                            receipt.bytes_written(),
+                            receipt.chunks_written(),
+                        )?;
+                    } else {
+                        writeln!(
+                            out,
+                            "Uploaded GIF payload: {} bytes in {} chunk(s) across {} logical chunk(s)",
+                            receipt.bytes_written(),
+                            receipt.chunks_written(),
+                            receipt.logical_chunks_sent(),
+                        )?;
+                    }
+                }
+                OutputFormat::Json => {
+                    write_json_line(
+                        out,
+                        &ImageResult::Image {
+                            media_type: "gif".to_string(),
+                            bytes_written: receipt.bytes_written(),
+                            chunks_written: receipt.chunks_written(),
+                            logical_chunks_sent: receipt.logical_chunks_sent(),
+                        },
+                    )?;
+                }
+            }
         }
     }
     Ok(())

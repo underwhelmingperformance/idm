@@ -1,5 +1,4 @@
 use std::io;
-use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
@@ -11,9 +10,9 @@ use tracing::instrument;
 use crate::cli::OutputFormat;
 use crate::hw::HardwareClient;
 use crate::{
-    Brightness, BrightnessHandler, FullscreenColourHandler, GifAnimation, GifUploadHandler,
-    GifUploadRequest, PowerHandler, Rgb, ScreenPower, SessionHandler, TextOptions,
-    TextUploadHandler, TextUploadRequest, TimeSyncHandler, UploadPacing,
+    Brightness, BrightnessHandler, FullscreenColourHandler, PowerHandler, Rgb, ScreenPower,
+    SessionHandler, TextOptions, TextUploadHandler, TextUploadRequest, TimeSyncHandler,
+    UploadPacing,
 };
 
 /// JSON result emitted by a `control` action.
@@ -37,12 +36,6 @@ enum ControlResult {
     Text {
         bytes_written: usize,
         chunks_written: usize,
-    },
-    Gif {
-        bytes_written: usize,
-        chunks_written: usize,
-        logical_chunks_sent: usize,
-        cached: bool,
     },
 }
 
@@ -81,8 +74,6 @@ pub enum ControlAction {
     SyncTime(SyncTimeArgs),
     /// Upload text content.
     Text(TextArgs),
-    /// Upload GIF bytes from a file.
-    Gif(GifArgs),
 }
 
 /// Arguments for `control power`.
@@ -249,49 +240,6 @@ impl TextArgs {
     }
 }
 
-/// Arguments for `control gif`.
-#[derive(Debug, Args)]
-pub struct GifArgs {
-    /// Path to a GIF file to upload.
-    gif_file: PathBuf,
-}
-
-impl GifArgs {
-    /// Creates GIF-upload arguments.
-    ///
-    /// ```
-    /// use std::path::Path;
-    /// use std::path::PathBuf;
-    ///
-    /// use idm::GifArgs;
-    ///
-    /// let args = GifArgs::new(PathBuf::from("demo.gif"));
-    /// assert_eq!(Path::new("demo.gif"), args.path());
-    /// ```
-    #[must_use]
-    pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self {
-            gif_file: path.into(),
-        }
-    }
-
-    /// Returns the selected GIF file path.
-    ///
-    /// ```
-    /// use std::path::Path;
-    /// use std::path::PathBuf;
-    ///
-    /// use idm::GifArgs;
-    ///
-    /// let args = GifArgs::new(PathBuf::from("demo.gif"));
-    /// assert_eq!(Path::new("demo.gif"), args.path());
-    /// ```
-    #[must_use]
-    pub fn path(&self) -> &Path {
-        &self.gif_file
-    }
-}
-
 fn parse_brightness(value: &str) -> Result<Brightness, String> {
     let parsed = value.parse::<u8>().map_err(|error| error.to_string())?;
     Brightness::new(parsed).map_err(|error| error.to_string())
@@ -438,42 +386,6 @@ where
                 }
             }
         }
-        ControlAction::Gif(gif_args) => {
-            let receipt =
-                GifUploadHandler::upload(session, default_cli_gif_request(&gif_args.gif_file)?)
-                    .await?;
-            match output_format {
-                OutputFormat::Pretty => {
-                    if receipt.cached() {
-                        writeln!(
-                            out,
-                            "Uploaded GIF payload: {} bytes in {} chunk(s); device cache hit",
-                            receipt.bytes_written(),
-                            receipt.chunks_written(),
-                        )?;
-                    } else {
-                        writeln!(
-                            out,
-                            "Uploaded GIF payload: {} bytes in {} chunk(s) across {} logical chunk(s)",
-                            receipt.bytes_written(),
-                            receipt.chunks_written(),
-                            receipt.logical_chunks_sent(),
-                        )?;
-                    }
-                }
-                OutputFormat::Json => {
-                    write_json_line(
-                        out,
-                        &ControlResult::Gif {
-                            bytes_written: receipt.bytes_written(),
-                            chunks_written: receipt.chunks_written(),
-                            logical_chunks_sent: receipt.logical_chunks_sent(),
-                            cached: receipt.cached(),
-                        },
-                    )?;
-                }
-            }
-        }
     }
 
     Ok(())
@@ -500,20 +412,8 @@ fn default_cli_text_request(text: &str) -> TextUploadRequest {
         })
 }
 
-fn default_cli_gif_request(path: &Path) -> Result<GifUploadRequest> {
-    let payload = std::fs::read(path)
-        .with_context(|| format!("failed to read GIF file `{}`", path.display()))?;
-    let gif = GifAnimation::try_from(payload)
-        .with_context(|| format!("failed to decode GIF file `{}`", path.display()))?;
-    Ok(GifUploadRequest::new(gif)
-        .with_per_fragment_delay(Duration::from_millis(20))
-        .with_ack_timeout(Duration::from_secs(5)))
-}
-
 #[cfg(test)]
 mod tests {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
     use pretty_assertions::assert_eq;
 
     use super::*;
@@ -535,38 +435,5 @@ mod tests {
             });
 
         assert_eq!(expected, request);
-    }
-
-    #[test]
-    fn default_cli_gif_request_reads_file_and_applies_defaults() -> anyhow::Result<()> {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock should be after unix epoch")
-            .as_nanos();
-        let file_path = std::env::temp_dir().join(format!(
-            "idm-control-gif-{}-{timestamp}.gif",
-            std::process::id()
-        ));
-        let expected_payload = vec![
-            0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00, 0x00, 0x00,
-            0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x21, 0xF9, 0x04, 0x01, 0x00, 0x00, 0x00, 0x00, 0x2C,
-            0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x44, 0x01, 0x00,
-            0x3B,
-        ];
-        std::fs::write(&file_path, &expected_payload)
-            .with_context(|| format!("failed to write temporary file `{}`", file_path.display()))?;
-
-        let request = default_cli_gif_request(&file_path)?;
-        let expected = GifUploadRequest::new(
-            GifAnimation::try_from(expected_payload).expect("test gif payload should decode"),
-        )
-        .with_per_fragment_delay(Duration::from_millis(20))
-        .with_ack_timeout(Duration::from_secs(5));
-
-        assert_eq!(expected, request);
-        std::fs::remove_file(&file_path).with_context(|| {
-            format!("failed to remove temporary file `{}`", file_path.display())
-        })?;
-        Ok(())
     }
 }
