@@ -321,8 +321,10 @@ Behaviour:
 
 ## GIF Upload Handler
 
-Status: `TODO`  
+Status: `DONE`  
 Priority: `P0`
+Comment: Implemented with 4K logical chunking, CRC32 framing, notify ACK pacing,
+cache-hit short-circuit behaviour, and CLI wiring via `idm control gif`.
 
 Protocol references:
 
@@ -335,6 +337,8 @@ Behaviour:
 - Chunk raw GIF bytes at `4096` protocol chunk size.
 - Emit 16-byte GIF headers with proper flags/CRC/tail profile.
 - Use notification-driven flow control.
+- Drain stale notify events before upload to reduce cross-command ACK bleed.
+- CLI wired: `idm control gif <gif_file>`.
 
 ## Image Upload Handler (Non-DIY)
 

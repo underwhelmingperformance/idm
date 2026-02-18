@@ -98,3 +98,51 @@ async fn text_upload_rejects_unresolved_text_path_routing_profile() -> anyhow::R
     session.close().await?;
     Ok(())
 }
+
+#[tokio::test]
+async fn gif_upload_handler_reports_cache_hit_on_first_chunk_finish() -> anyhow::Result<()> {
+    let fake_args = idm::FakeArgs::builder()
+        .scan_fixture("hci0|AA:BB:CC|IDM-Clock|-43")?
+        .notifications("0500010003")?
+        .build();
+    let client = idm::fake_hardware_client(fake_args);
+    let session = client.connect_first_device("IDM-").await?;
+
+    let payload = vec![0xAB; 5000];
+    let request = idm::GifUploadRequest::new(payload)
+        .with_per_fragment_delay(Duration::ZERO)
+        .with_ack_timeout(Duration::from_millis(250));
+    let receipt = idm::GifUploadHandler::upload(&session, request).await?;
+
+    assert_eq!(true, receipt.cached());
+    assert_eq!(1, receipt.logical_chunks_sent());
+    assert_eq!(4112, receipt.bytes_written());
+    assert_eq!(9, receipt.chunks_written());
+
+    session.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn gif_upload_handler_surfaces_device_rejection_status() -> anyhow::Result<()> {
+    let fake_args = idm::FakeArgs::builder()
+        .scan_fixture("hci0|AA:BB:CC|IDM-Clock|-43")?
+        .notifications("0500010002")?
+        .build();
+    let client = idm::fake_hardware_client(fake_args);
+    let session = client.connect_first_device("IDM-").await?;
+
+    let request = idm::GifUploadRequest::new([0x47, 0x49, 0x46])
+        .with_per_fragment_delay(Duration::ZERO)
+        .with_ack_timeout(Duration::from_millis(250));
+    let result = idm::GifUploadHandler::upload(&session, request).await;
+
+    assert_matches!(
+        result,
+        Err(idm::ProtocolError::GifUpload(error))
+            if matches!(*error, idm::GifUploadError::TransferRejected { status: 0x02 })
+    );
+
+    session.close().await?;
+    Ok(())
+}

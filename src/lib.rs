@@ -15,15 +15,16 @@ pub use app::{
     run_with_clients_and_log_level, run_with_log_level,
 };
 pub use cli::{
-    Args, BrightnessArgs, ColourArgs, Command, ControlAction, ControlArgs, FakeArgs, ListenArgs,
-    LogLevel, OutputFormat, PowerArgs, PowerState, SyncTimeArgs, TextArgs,
+    Args, BrightnessArgs, ColourArgs, Command, ControlAction, ControlArgs, FakeArgs, GifArgs,
+    ListenArgs, LogLevel, OutputFormat, PowerArgs, PowerState, SyncTimeArgs, TextArgs,
 };
 pub use error::{FixtureError, InteractionError, ProtocolError};
 pub use handlers::{
     Brightness, BrightnessError, BrightnessHandler, DiyPrefixFields, FrameCodec, FrameCodecError,
-    FullscreenColourHandler, GifChunkFlag, GifHeaderFields, OtaChunkHeaderFields, PowerHandler,
-    Rgb, ScreenPower, ShortFrame, TextHeaderFields, TextOptions, TextUploadError,
-    TextUploadHandler, TextUploadRequest, TimeSyncHandler, UploadPacing, UploadReceipt,
+    FullscreenColourHandler, GifChunkFlag, GifHeaderFields, GifUploadError, GifUploadHandler,
+    GifUploadReceipt, GifUploadRequest, OtaChunkHeaderFields, PowerHandler, Rgb, ScreenPower,
+    ShortFrame, TextHeaderFields, TextOptions, TextUploadError, TextUploadHandler,
+    TextUploadRequest, TimeSyncHandler, UploadPacing, UploadReceipt,
 };
 pub use hw::{
     AmbiguousShape, CharacteristicInfo, DeviceProfile, DeviceSession, EndpointPresence,

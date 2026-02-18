@@ -1,5 +1,6 @@
 use insta::assert_snapshot;
 use std::time::{Duration, Instant};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
 use clap::error::ErrorKind;
@@ -198,5 +199,40 @@ async fn control_text_command_uploads_payload() -> anyhow::Result<()> {
         "Uploaded text payload: 70 bytes in 1 chunk(s)",
         stdout.trim_end()
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn control_gif_command_uploads_payload() -> anyhow::Result<()> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock should be after unix epoch")
+        .as_nanos();
+    let file_path = std::env::temp_dir().join(format!(
+        "idm-control-gif-cli-{}-{timestamp}.gif",
+        std::process::id()
+    ));
+    std::fs::write(&file_path, [0x47, 0x49, 0x46, 0x38, 0x39, 0x61])?;
+
+    let file_path_string = file_path.to_string_lossy().to_string();
+    let stdout = run_with_argv([
+        "idm",
+        "--fake",
+        "--fake-scan",
+        "hci0|AA:BB:CC|IDM-Clock|-43",
+        "--fake-notifications",
+        "0500010003",
+        "control",
+        "gif",
+        &file_path_string,
+    ])
+    .await?;
+
+    assert_eq!(
+        "Uploaded GIF payload: 22 bytes in 1 chunk(s) across 1 logical chunk(s)",
+        stdout.trim_end()
+    );
+
+    std::fs::remove_file(file_path)?;
     Ok(())
 }
