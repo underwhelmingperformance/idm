@@ -1,10 +1,11 @@
 _: {
   perSystem = {config, ...}: let
-    inherit (config.idm) pkgs craneLib commonArgs cargoArtifacts;
+    inherit (config.idm) pkgs craneLib commonArgs cargoArtifacts packagePreCheck;
 
     idm = craneLib.buildPackage (commonArgs
       // {
         inherit cargoArtifacts;
+        preCheck = packagePreCheck;
       });
 
     vhs = pkgs.writeShellApplication {
