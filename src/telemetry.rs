@@ -95,10 +95,5 @@ fn progress_tick_settings() -> TickSettings {
 }
 
 fn progress_span_filter(metadata: &Metadata<'_>) -> bool {
-    metadata.is_span()
-        && metadata.target().starts_with("idm::")
-        && matches!(
-            *metadata.level(),
-            tracing::Level::INFO | tracing::Level::WARN | tracing::Level::ERROR
-        )
+    metadata.is_span() && metadata.fields().field("progress").is_some()
 }

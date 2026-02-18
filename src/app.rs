@@ -1,6 +1,7 @@
 use std::io;
 
 use anyhow::Result;
+use idm_macros::progress;
 use owo_colors::OwoColorize;
 use tracing::instrument;
 use tracing_indicatif::span_ext::IndicatifSpanExt;
@@ -16,7 +17,6 @@ use crate::telemetry;
 use crate::terminal::{SystemTerminalClient, TerminalClient};
 
 const DEFAULT_DEVICE_NAME_PREFIX: &str = "IDM-";
-const CONNECTING_PROGRESS_MESSAGE: &str = "Scanning for iDotMatrix devices and connecting";
 
 /// Creates a hardware client backed by the real BLE transport.
 #[must_use]
@@ -83,24 +83,22 @@ impl SessionHandler {
     /// # Errors
     ///
     /// Returns an error if discovery or connection fails.
+    #[progress(
+        message = "Scanning for iDotMatrix devices and connecting",
+        finished = format!("{} Connected", "✓".green()),
+    )]
     #[instrument(skip(self), level = "info", fields(name_prefix = %self.name_prefix))]
     pub async fn connect_first(self) -> Result<DeviceSession> {
         let name_prefix = self.name_prefix;
         let hardware_client = self.hardware_client;
-        let progress = tracing::Span::current();
-        progress.pb_set_message(CONNECTING_PROGRESS_MESSAGE);
         match hardware_client
             .connect_first_device(name_prefix.as_str())
             .await
         {
-            Ok(session) => {
-                let finish_message = format!("{} Connected", "✓".green());
-                progress.pb_set_finish_message(&finish_message);
-                Ok(session)
-            }
+            Ok(session) => Ok(session),
             Err(error) => {
                 let finish_message = format!("{} Connection failed", "✗".red());
-                progress.pb_set_finish_message(&finish_message);
+                tracing::Span::current().pb_set_finish_message(&finish_message);
                 Err(error.into())
             }
         }
