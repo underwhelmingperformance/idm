@@ -17,7 +17,7 @@ pub use app::{
 };
 pub use cli::{
     Args, BrightnessArgs, ColourArgs, Command, ControlAction, ControlArgs, FakeArgs, GifArgs,
-    ListenArgs, LogLevel, OutputFormat, PowerArgs, PowerState, SyncTimeArgs, TextArgs,
+    ImageArgs, ListenArgs, LogLevel, OutputFormat, PowerArgs, PowerState, SyncTimeArgs, TextArgs,
 };
 pub use error::{FixtureError, InteractionError, ProtocolError};
 pub use handlers::{
@@ -35,7 +35,10 @@ pub use hw::{
     NotificationRunSummary, PanelDimensions, PanelSize, ScanIdentity, ScanModelHandler,
     ServiceInfo, SessionMetadata, TextPath, WriteMode,
 };
-pub use media::{GifAnimation, GifAnimationError, Rgb888Frame, Rgb888FrameError};
+pub use media::{
+    GifAnimation, GifAnimationError, ImagePreparationError, ImagePreprocessor, PreparedStillImage,
+    Rgb888Frame, Rgb888FrameError,
+};
 pub use notification::{NotificationDecodeError, NotificationHandler, NotifyEvent, TransferFamily};
 pub use protocol::EndpointId;
 pub use terminal::TerminalClient;

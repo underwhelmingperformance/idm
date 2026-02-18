@@ -1,5 +1,6 @@
 pub(crate) mod command;
 pub(crate) mod control;
+pub(crate) mod image;
 pub(crate) mod inspect;
 pub(crate) mod listen;
 pub(crate) mod ui;
@@ -9,4 +10,5 @@ pub use self::control::{
     BrightnessArgs, ColourArgs, ControlAction, ControlArgs, GifArgs, PowerArgs, PowerState,
     SyncTimeArgs, TextArgs,
 };
+pub use self::image::ImageArgs;
 pub use self::listen::ListenArgs;

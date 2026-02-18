@@ -303,6 +303,9 @@ where
         Command::Control(args) => {
             crate::cli::control::run(hardware_client, &args, out, output_format).await
         }
+        Command::Image(args) => {
+            crate::cli::image::run(hardware_client, &args, out, output_format).await
+        }
     }
 }
 
@@ -311,5 +314,6 @@ fn command_name(command: &Command) -> &'static str {
         Command::Inspect => "inspect",
         Command::Listen(_args) => "listen",
         Command::Control(_args) => "control",
+        Command::Image(_args) => "image",
     }
 }

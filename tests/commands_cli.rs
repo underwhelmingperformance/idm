@@ -4,6 +4,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use clap::Parser;
 use clap::error::ErrorKind;
+use image::ImageEncoder;
 use pretty_assertions::assert_eq;
 
 #[derive(Debug, Default)]
@@ -238,6 +239,49 @@ async fn control_gif_command_uploads_payload() -> anyhow::Result<()> {
 
     assert_eq!(
         "Uploaded GIF payload: 59 bytes in 1 chunk(s) across 1 logical chunk(s)",
+        stdout.trim_end()
+    );
+
+    std::fs::remove_file(file_path)?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn image_command_uploads_transformed_payload() -> anyhow::Result<()> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock should be after unix epoch")
+        .as_nanos();
+    let file_path = std::env::temp_dir().join(format!(
+        "idm-image-cli-{}-{timestamp}.png",
+        std::process::id()
+    ));
+
+    let source = image::RgbaImage::from_pixel(2, 1, image::Rgba([0x11, 0x22, 0x33, 0xFF]));
+    let mut encoded = Vec::new();
+    image::codecs::png::PngEncoder::new(&mut encoded).write_image(
+        source.as_raw(),
+        2,
+        1,
+        image::ExtendedColorType::Rgba8,
+    )?;
+    std::fs::write(&file_path, encoded)?;
+
+    let file_path_string = file_path.to_string_lossy().to_string();
+    let stdout = run_with_argv([
+        "idm",
+        "--fake",
+        "--fake-scan",
+        "hci0|AA:BB:CC|IDM-16-Clock|-43",
+        "--fake-notifications",
+        "0500020003",
+        "image",
+        &file_path_string,
+    ])
+    .await?;
+
+    assert_eq!(
+        "Uploaded image payload: 784 bytes in 2 chunk(s) across 1 logical chunk(s)",
         stdout.trim_end()
     );
 

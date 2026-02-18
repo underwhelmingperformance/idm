@@ -368,6 +368,7 @@ Behaviour:
 - Keep file/container decoding and resize/rotation outside this handler.
 - Align tail/profile bytes to target firmware behaviour.
 - Reuse chunker and flow-control primitives from GIF handler.
+- CLI wired via top-level `idm image <image_file>`.
 
 ## DIY Upload Handler (Raw RGB)
 

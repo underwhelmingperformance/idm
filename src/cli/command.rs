@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 use tracing_subscriber::filter::LevelFilter;
 
 use crate::cli::control::ControlArgs;
+use crate::cli::image::ImageArgs;
 use crate::cli::listen::ListenArgs;
 use crate::error::CliConfigError;
 use crate::hw::{
@@ -238,6 +239,8 @@ pub enum Command {
     Listen(ListenArgs),
     /// Scan until the first iDotMatrix device is found, connect, then send one control command.
     Control(ControlArgs),
+    /// Scan until the first iDotMatrix device is found, connect, then upload one image.
+    Image(ImageArgs),
 }
 
 fn parse_duration(value: &str) -> Result<Duration, String> {
