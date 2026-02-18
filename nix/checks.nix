@@ -1,6 +1,6 @@
 _: {
   perSystem = {config, ...}: let
-    inherit (config.idm) craneLib commonArgs cargoArtifacts;
+    inherit (config.idm) craneLib commonArgs cargoArtifacts packagePreCheck;
   in {
     checks = {
       clippy = craneLib.cargoClippy (commonArgs
@@ -12,6 +12,7 @@ _: {
       tests = craneLib.cargoTest (commonArgs
         // {
           inherit cargoArtifacts;
+          preCheck = packagePreCheck;
         });
 
       doc = craneLib.cargoDoc (commonArgs
