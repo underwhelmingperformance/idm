@@ -258,44 +258,52 @@ struct ModelResolutionSections {
     device_state: DeviceStateSection,
 }
 
+pub(crate) struct LedInfoDiagnosticParams {
+    pub(crate) response: Option<LedInfoResponse>,
+    pub(crate) query_outcome: LedInfoQueryOutcome,
+    pub(crate) write_modes_attempted: Vec<String>,
+    pub(crate) sync_time_fallback_attempted: bool,
+    pub(crate) last_payload: Option<Vec<u8>>,
+}
+
+pub(crate) struct ScreenLightDiagnosticParams {
+    pub(crate) query_outcome: ScreenLightQueryOutcome,
+    pub(crate) write_modes_attempted: Vec<String>,
+    pub(crate) last_payload: Option<Vec<u8>>,
+    pub(crate) timeout: Option<u8>,
+}
+
 /// Constructs connect-time model resolution diagnostics.
 pub(crate) fn model_resolution_diagnostics(
     scan_identity: Option<ScanIdentity>,
     scan_properties_debug: Option<&ScanPropertiesDebug>,
-    led_info_response: Option<LedInfoResponse>,
-    led_info_query_outcome: LedInfoQueryOutcome,
-    led_info_write_modes_attempted: Vec<String>,
-    led_info_sync_time_fallback_attempted: bool,
-    led_info_last_payload: Option<Vec<u8>>,
-    screen_light_query_outcome: ScreenLightQueryOutcome,
-    screen_light_write_modes_attempted: Vec<String>,
-    screen_light_last_payload: Option<Vec<u8>>,
-    screen_light_timeout: Option<u8>,
+    led_info: LedInfoDiagnosticParams,
+    screen_light: ScreenLightDiagnosticParams,
 ) -> ConnectionDiagnostics {
     let sections = ModelResolutionSections {
         scan_identity: ScanIdentitySection::from_scan_identity(scan_identity),
         advertisement_data: AdvertisementDataSection::from_scan_properties(scan_properties_debug),
         led_info_probe: LedInfoProbeSection::from_led_info_probe(
-            led_info_query_outcome,
-            led_info_write_modes_attempted,
-            led_info_sync_time_fallback_attempted,
-            led_info_last_payload,
+            led_info.query_outcome,
+            led_info.write_modes_attempted,
+            led_info.sync_time_fallback_attempted,
+            led_info.last_payload,
         ),
         device_state: DeviceStateSection::from_probe_results(
-            led_info_response,
-            led_info_query_outcome,
-            screen_light_query_outcome.clone(),
-            screen_light_timeout,
+            led_info.response,
+            led_info.query_outcome,
+            screen_light.query_outcome,
+            screen_light.timeout,
         ),
     };
 
     let mut diagnostics = ConnectionDiagnosticsBuilder::new();
     diagnostics.extend(&sections);
-    if !screen_light_write_modes_attempted.is_empty() || screen_light_last_payload.is_some() {
+    if !screen_light.write_modes_attempted.is_empty() || screen_light.last_payload.is_some() {
         diagnostics.push_section(&ScreenLightProbeSection::from_screen_light_probe(
-            screen_light_query_outcome,
-            screen_light_write_modes_attempted,
-            screen_light_last_payload,
+            screen_light.query_outcome,
+            screen_light.write_modes_attempted,
+            screen_light.last_payload,
         ));
     }
     diagnostics.finish()

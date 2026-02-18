@@ -21,7 +21,8 @@ use super::model::{
 };
 use super::model_overrides::{ModelOverrideStore, ModelResolutionConfig, is_supported_led_type};
 use super::model_resolution_diagnostics::{
-    ManufacturerDataRecord, ScanPropertiesDebug, ServiceDataRecord, model_resolution_diagnostics,
+    LedInfoDiagnosticParams, ManufacturerDataRecord, ScreenLightDiagnosticParams,
+    ScanPropertiesDebug, ServiceDataRecord, model_resolution_diagnostics,
 };
 use super::profile::{resolve_device_profile, resolve_device_routing_profile};
 use super::scan_model::{ScanIdentity, ScanModelHandler};
@@ -320,15 +321,19 @@ impl BtleplugBackend {
         let connection_diagnostics = model_resolution_diagnostics(
             connected.device.scan_identity().copied(),
             Some(&connected.scan_properties_debug),
-            led_info,
-            led_info_query.outcome,
-            led_info_query.write_modes_attempted,
-            led_info_query.sync_time_fallback_attempted,
-            led_info_query.last_payload,
-            screen_light_query.outcome,
-            screen_light_query.write_modes_attempted,
-            screen_light_query.last_payload,
-            screen_light_query.timeout,
+            LedInfoDiagnosticParams {
+                response: led_info,
+                query_outcome: led_info_query.outcome,
+                write_modes_attempted: led_info_query.write_modes_attempted,
+                sync_time_fallback_attempted: led_info_query.sync_time_fallback_attempted,
+                last_payload: led_info_query.last_payload,
+            },
+            ScreenLightDiagnosticParams {
+                query_outcome: screen_light_query.outcome,
+                write_modes_attempted: screen_light_query.write_modes_attempted,
+                last_payload: screen_light_query.last_payload,
+                timeout: screen_light_query.timeout,
+            },
         );
         let session_metadata =
             SessionMetadata::new(true, write_without_response_limit, device_profile)
