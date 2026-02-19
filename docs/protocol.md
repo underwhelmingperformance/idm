@@ -544,7 +544,7 @@ Then wrapped in 16-byte text-family chunk headers (`family=0x03`).
 
 ```text
 offset  size  field
-0..1    2     character_count (big-endian u16: [high, low])
+0..1    2     character_count (little-endian u16: [low, high])
 2       1     resolution_flag_1
 3       1     resolution_flag_2
 4       1     mode (text effect / animation style)

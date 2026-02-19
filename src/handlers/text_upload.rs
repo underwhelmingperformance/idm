@@ -452,7 +452,7 @@ fn encode_metadata(
         })?;
 
     let mut metadata = [0u8; METADATA_LEN];
-    metadata[0..2].copy_from_slice(&char_count_u16.to_be_bytes());
+    metadata[0..2].copy_from_slice(&char_count_u16.to_le_bytes());
     let (resolution_flag_1, resolution_flag_2) = text_path_resolution_flags(context.text_path);
     metadata[2] = resolution_flag_1;
     metadata[3] = resolution_flag_2;
@@ -657,7 +657,7 @@ mod tests {
         .expect("metadata should encode");
         assert_eq!(
             [
-                0x00, 0x02, 0x01, 0x01, 0x00, 0x20, 0x01, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00,
+                0x02, 0x00, 0x01, 0x01, 0x00, 0x20, 0x01, 0xFF, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00,
             ],
             metadata
         );

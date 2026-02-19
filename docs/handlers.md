@@ -314,9 +314,13 @@ Behaviour:
 
 - Build text payload from metadata + glyph stream according to selected
   resolution/profile.
+- Encode text metadata `character_count` as little-endian (`[low, high]`),
+  matching the vendor implementation.
 - Compute CRC32 over logical text payload.
 - Chunk at protocol size and then transport size.
 - Use notification-driven pacing with fallback timeout policy.
+- In notify-ack mode, pacing waits on per-block acknowledgements without a fixed
+  inter-fragment delay.
 - Consume typed notification events from the session API rather than decoding
   raw notify payload bytes in handler code.
 - CLI wired: `idm control text <text>`.
