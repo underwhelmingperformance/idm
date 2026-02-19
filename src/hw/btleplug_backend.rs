@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -13,11 +14,10 @@ use tokio_stream::StreamExt;
 use tracing::{debug, info, instrument, trace};
 
 use super::DeviceProfile;
-use super::hardware::{ConnectedBleSession, WriteMode, missing_required_endpoints};
+use super::hardware::{ConnectedBleSession, PayloadStream, WriteMode, missing_required_endpoints};
 use super::model::{
     CharacteristicInfo, EndpointPresence, FoundDevice, InspectReport, LedInfoQueryOutcome,
-    ListenStopReason, NotificationRunSummary, ScreenLightQueryOutcome, ServiceInfo,
-    SessionMetadata,
+    ScreenLightQueryOutcome, ServiceInfo, SessionMetadata,
 };
 use super::model_overrides::{ModelOverrideStore, ModelResolutionConfig, is_supported_led_type};
 use super::model_resolution_diagnostics::{
@@ -1127,7 +1127,7 @@ impl RealDeviceSession {
     }
 }
 
-#[async_trait(?Send)]
+#[async_trait]
 impl ConnectedBleSession for RealDeviceSession {
     fn device(&self) -> &FoundDevice {
         &self.device
@@ -1197,55 +1197,27 @@ impl ConnectedBleSession for RealDeviceSession {
         Ok(())
     }
 
-    #[instrument(
-        skip(self, on_notification),
-        level = "debug",
-        fields(?endpoint, ?max_notifications)
-    )]
-    async fn run_notifications(
+    async fn notification_payloads(
         &self,
         endpoint: EndpointId,
-        max_notifications: Option<usize>,
-        on_notification: &mut dyn FnMut(usize, Vec<u8>),
-    ) -> Result<NotificationRunSummary, InteractionError> {
-        let expected_characteristic = self.characteristic_for(endpoint)?;
-        let expected_uuid = expected_characteristic.uuid.to_string();
-        let mut notifications = self.peripheral.notifications().await?;
-        let mut received = 0usize;
+    ) -> Result<PayloadStream, InteractionError> {
+        let characteristic = self.characteristic_for(endpoint)?;
+        let expected_uuid = characteristic.uuid;
+        let notifications = self.peripheral.notifications().await?;
 
-        let stop_reason = loop {
-            tokio::select! {
-                signal = tokio::signal::ctrl_c() => {
-                    signal.map_err(|source| InteractionError::CtrlC { source })?;
-                    break ListenStopReason::Interrupted;
-                }
-                maybe_notification = notifications.next() => {
-                    match maybe_notification {
-                        Some(notification) => {
-                            let notification_uuid = notification.uuid.to_string();
-                            if !notification_uuid.eq_ignore_ascii_case(&expected_uuid) {
-                                continue;
-                            }
-
-                            received += 1;
-                            on_notification(received, notification.value);
-                            if let Some(limit) = max_notifications && received >= limit {
-                                break ListenStopReason::ReachedLimit(limit);
-                            }
-                        }
-                        None => {
-                            break ListenStopReason::NotificationStreamClosed;
-                        }
-                    }
-                }
+        let filtered = notifications.filter_map(move |notification| {
+            if notification.uuid == expected_uuid {
+                Some(notification.value)
+            } else {
+                None
             }
-        };
+        });
 
-        Ok(NotificationRunSummary::new(received, stop_reason))
+        Ok(Box::pin(filtered))
     }
 
     #[instrument(skip(self), level = "debug")]
-    async fn close(self: Box<Self>) -> Result<(), InteractionError> {
+    async fn close(self: Arc<Self>) -> Result<(), InteractionError> {
         if self.peripheral.is_connected().await? {
             self.peripheral.disconnect().await?;
         }

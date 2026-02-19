@@ -5,10 +5,12 @@ use font8x8::UnicodeFonts;
 use idm_macros::progress;
 use thiserror::Error;
 use tokio::time::timeout;
+use tokio_stream::StreamExt;
+use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 use crate::error::ProtocolError;
-use crate::hw::{DeviceSession, TextPath, WriteMode};
+use crate::hw::{DeviceSession, NotificationSubscription, TextPath, WriteMode};
 use crate::protocol::EndpointId;
 use crate::{FrameCodec, NotificationDecodeError, NotifyEvent, Rgb, TransferFamily};
 
@@ -281,55 +283,42 @@ impl TextUploadHandler {
         let endpoint = EndpointId::ReadNotifyCharacteristic;
         let use_notify = matches!(request.pacing, UploadPacing::NotifyAck { .. });
 
-        if use_notify {
-            session.subscribe_endpoint(endpoint).await?;
-        }
+        let mut stream = if use_notify {
+            Some(
+                session
+                    .notification_stream(endpoint, None, CancellationToken::new())
+                    .await?,
+            )
+        } else {
+            None
+        };
 
-        let upload_result = async {
-            let mut transport_chunks_total = 0usize;
+        let mut transport_chunks_total = 0usize;
 
-            for block in &frame_blocks {
-                let block_transport_chunks = block.len().div_ceil(chunk_size);
-                transport_chunks_total += block_transport_chunks;
-                progress_inc_length!(block_transport_chunks);
+        for block in &frame_blocks {
+            let block_transport_chunks = block.len().div_ceil(chunk_size);
+            transport_chunks_total += block_transport_chunks;
+            progress_inc_length!(block_transport_chunks);
 
-                for transport_chunk in block.chunks(chunk_size) {
-                    session
-                        .write_endpoint(
-                            EndpointId::WriteCharacteristic,
-                            transport_chunk,
-                            WriteMode::WithoutResponse,
-                        )
-                        .await?;
-                    bytes_written += transport_chunk.len();
-                    chunks_written += 1;
-                    progress_inc!();
-                    progress_trace!(chunks_written, transport_chunks_total);
-                    apply_transport_pacing(request.pacing).await?;
-                }
-                apply_block_pacing(session, request.pacing).await?;
+            for transport_chunk in block.chunks(chunk_size) {
+                session
+                    .write_endpoint(
+                        EndpointId::WriteCharacteristic,
+                        transport_chunk,
+                        WriteMode::WithoutResponse,
+                    )
+                    .await?;
+                bytes_written += transport_chunk.len();
+                chunks_written += 1;
+                progress_inc!();
+                progress_trace!(chunks_written, transport_chunks_total);
+                apply_transport_pacing(request.pacing).await?;
             }
-
-            Ok(UploadReceipt::new(bytes_written, chunks_written))
-        }
-        .await;
-
-        if use_notify {
-            match session.unsubscribe_endpoint(endpoint).await {
-                Ok(()) => {}
-                Err(error) => {
-                    if upload_result.is_ok() {
-                        return Err(error.into());
-                    }
-                    tracing::trace!(
-                        ?error,
-                        "failed to unsubscribe text-upload notifications cleanly"
-                    );
-                }
-            }
+            apply_block_pacing(stream.as_mut(), request.pacing).await?;
         }
 
-        upload_result
+        drop(stream);
+        Ok(UploadReceipt::new(bytes_written, chunks_written))
     }
 }
 
@@ -368,50 +357,41 @@ async fn apply_transport_pacing(pacing: UploadPacing) -> Result<(), ProtocolErro
     }
 }
 
-#[instrument(skip(session), level = "trace", fields(?pacing))]
+#[instrument(skip(stream), level = "trace", fields(?pacing))]
 async fn apply_block_pacing(
-    session: &DeviceSession,
+    stream: Option<&mut NotificationSubscription>,
     pacing: UploadPacing,
 ) -> Result<(), ProtocolError> {
     match pacing {
         UploadPacing::None | UploadPacing::Delay { .. } => Ok(()),
-        UploadPacing::NotifyAck { timeout } => wait_for_notify_ack(session, timeout).await,
+        UploadPacing::NotifyAck { timeout } => {
+            wait_for_notify_ack(
+                stream.expect("stream required for NotifyAck pacing"),
+                timeout,
+            )
+            .await
+        }
     }
 }
 
-#[instrument(skip(session), level = "trace", fields(timeout_ms = timeout_duration.as_millis()))]
+#[instrument(skip(stream), level = "trace", fields(timeout_ms = timeout_duration.as_millis()))]
 async fn wait_for_notify_ack(
-    session: &DeviceSession,
+    stream: &mut NotificationSubscription,
     timeout_duration: Duration,
 ) -> Result<(), ProtocolError> {
     tracing::trace!(
         timeout_ms = timeout_duration.as_millis(),
         "waiting for text-upload acknowledgement"
     );
-    let mut decoded_event: Option<Result<NotifyEvent, NotificationDecodeError>> = None;
-    let wait_result = timeout(
-        timeout_duration,
-        session.run_notifications(
-            EndpointId::ReadNotifyCharacteristic,
-            Some(1),
-            |_index, event| {
-                decoded_event = Some(event);
-            },
-        ),
-    )
-    .await;
-
-    match wait_result {
+    match timeout(timeout_duration, stream.next()).await {
         Err(_elapsed) => {
             let timeout_ms = u64::try_from(timeout_duration.as_millis()).unwrap_or(u64::MAX);
             Err(TextUploadError::NotifyAckTimeout { timeout_ms }.into())
         }
-        Ok(Err(error)) => Err(error.into()),
-        Ok(Ok(_summary)) => {
-            let Some(event_result) = decoded_event else {
-                return Err(TextUploadError::MissingNotifyAck.into());
-            };
-            let event = event_result?;
+        Ok(None) => Err(TextUploadError::MissingNotifyAck.into()),
+        Ok(Some(Err(error))) => Err(error.into()),
+        Ok(Some(Ok(message))) => {
+            let event = message.event?;
             match event {
                 NotifyEvent::NextPackage(TransferFamily::Text)
                 | NotifyEvent::Finished(TransferFamily::Text) => Ok(()),

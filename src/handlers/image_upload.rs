@@ -4,10 +4,14 @@ use crc32fast::hash;
 use idm_macros::progress;
 use thiserror::Error;
 use tokio::time::{sleep, timeout};
+use tokio_stream::StreamExt;
+use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 use crate::error::ProtocolError;
-use crate::hw::{DeviceSession, GifHeaderProfile, PanelDimensions, WriteMode};
+use crate::hw::{
+    DeviceSession, GifHeaderProfile, NotificationSubscription, PanelDimensions, WriteMode,
+};
 use crate::protocol::EndpointId;
 use crate::{
     FrameCodec, GifChunkFlag, ImageHeaderFields, NotificationDecodeError, NotifyEvent, Rgb888Frame,
@@ -15,7 +19,7 @@ use crate::{
 };
 
 const LOGICAL_CHUNK_SIZE: usize = 4096;
-const DEFAULT_PER_FRAGMENT_DELAY: Duration = Duration::from_millis(20);
+const DEFAULT_PER_FRAGMENT_DELAY: Duration = Duration::ZERO;
 const DEFAULT_NOTIFY_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 const DRAIN_NOTIFICATION_TIMEOUT: Duration = Duration::from_millis(25);
 const MAX_STALE_NOTIFICATION_DRAIN: usize = 8;
@@ -176,7 +180,7 @@ impl ImageUploadRequest {
     /// let frame = Rgb888Frame::try_from((dimensions, vec![0x01, 0x02, 0x03]))
     ///     .expect("1x1 frame should require 3 bytes");
     /// let request = ImageUploadRequest::new(frame);
-    /// assert_eq!(Duration::from_millis(20), request.per_fragment_delay());
+    /// assert_eq!(Duration::ZERO, request.per_fragment_delay());
     /// ```
     #[must_use]
     pub fn per_fragment_delay(&self) -> Duration {
@@ -340,96 +344,77 @@ impl ImageUploadHandler {
         })?;
         let endpoint = EndpointId::ReadNotifyCharacteristic;
 
-        session.subscribe_endpoint(endpoint).await?;
+        let mut stream = session
+            .notification_stream(endpoint, None, CancellationToken::new())
+            .await?;
 
-        let upload_result = async {
-            drain_stale_notifications(session, endpoint).await?;
+        drain_stale_notifications(&mut stream).await?;
 
-            let mut bytes_written = 0usize;
-            let mut chunks_written = 0usize;
-            let mut logical_chunks_sent = 0usize;
-            let mut transport_chunks_total = 0usize;
+        let mut bytes_written = 0usize;
+        let mut chunks_written = 0usize;
+        let mut logical_chunks_sent = 0usize;
+        let mut transport_chunks_total = 0usize;
 
-            for (index, logical_chunk) in payload.chunks(LOGICAL_CHUNK_SIZE).enumerate() {
-                let chunk_flag = if index == 0 {
-                    GifChunkFlag::First
-                } else {
-                    GifChunkFlag::Continuation
-                };
-                let chunk_payload_len =
-                    u16::try_from(logical_chunk.len()).map_err(|_overflow| {
-                        ImageUploadError::ChunkPayloadTooLarge {
-                            chunk_payload_len: logical_chunk.len(),
-                            max_payload_len: u16::MAX as usize,
-                        }
-                    })?;
-                let fields =
-                    ImageHeaderFields::new(chunk_payload_len, chunk_flag, payload_len_u32, crc32)?;
-                let mut header = FrameCodec::encode_image_header(fields);
-                apply_media_header_profile(
-                    &mut header,
-                    session.device_profile().gif_header_profile(),
-                );
-
-                let mut frame_block = Vec::with_capacity(header.len() + logical_chunk.len());
-                frame_block.extend_from_slice(&header);
-                frame_block.extend_from_slice(logical_chunk);
-                logical_chunks_sent += 1;
-                let block_transport_chunks = frame_block.len().div_ceil(chunk_size);
-                transport_chunks_total += block_transport_chunks;
-                progress_inc_length!(block_transport_chunks);
-
-                for transport_chunk in frame_block.chunks(chunk_size) {
-                    session
-                        .write_endpoint(
-                            EndpointId::WriteCharacteristic,
-                            transport_chunk,
-                            WriteMode::WithoutResponse,
-                        )
-                        .await?;
-                    bytes_written += transport_chunk.len();
-                    chunks_written += 1;
-                    progress_inc!();
-                    progress_trace!(chunks_written, transport_chunks_total);
-                    apply_fragment_delay(request.per_fragment_delay).await;
+        for (index, logical_chunk) in payload.chunks(LOGICAL_CHUNK_SIZE).enumerate() {
+            let chunk_flag = if index == 0 {
+                GifChunkFlag::First
+            } else {
+                GifChunkFlag::Continuation
+            };
+            let chunk_payload_len = u16::try_from(logical_chunk.len()).map_err(|_overflow| {
+                ImageUploadError::ChunkPayloadTooLarge {
+                    chunk_payload_len: logical_chunk.len(),
+                    max_payload_len: u16::MAX as usize,
                 }
+            })?;
+            let fields =
+                ImageHeaderFields::new(chunk_payload_len, chunk_flag, payload_len_u32, crc32)?;
+            let mut header = FrameCodec::encode_image_header(fields);
+            apply_media_header_profile(&mut header, session.device_profile().gif_header_profile());
 
-                let ack_outcome = wait_for_image_ack(session, request.ack_timeout).await?;
-                if matches!(ack_outcome, ImageAckOutcome::Finished) {
-                    let chunk_number = index + 1;
-                    if chunk_number < logical_chunks_total {
-                        return Err(ImageUploadError::PrematureFinish {
-                            chunk_index: chunk_number,
-                            total_chunks: logical_chunks_total,
-                        }
-                        .into());
+            let mut frame_block = Vec::with_capacity(header.len() + logical_chunk.len());
+            frame_block.extend_from_slice(&header);
+            frame_block.extend_from_slice(logical_chunk);
+            logical_chunks_sent += 1;
+            let block_transport_chunks = frame_block.len().div_ceil(chunk_size);
+            transport_chunks_total += block_transport_chunks;
+            progress_inc_length!(block_transport_chunks);
+
+            for transport_chunk in frame_block.chunks(chunk_size) {
+                session
+                    .write_endpoint(
+                        EndpointId::WriteCharacteristic,
+                        transport_chunk,
+                        WriteMode::WithoutResponse,
+                    )
+                    .await?;
+                bytes_written += transport_chunk.len();
+                chunks_written += 1;
+                progress_inc!();
+                progress_trace!(chunks_written, transport_chunks_total);
+                apply_fragment_delay(request.per_fragment_delay).await;
+            }
+
+            let ack_outcome = wait_for_image_ack(&mut stream, request.ack_timeout).await?;
+            if matches!(ack_outcome, ImageAckOutcome::Finished) {
+                let chunk_number = index + 1;
+                if chunk_number < logical_chunks_total {
+                    return Err(ImageUploadError::PrematureFinish {
+                        chunk_index: chunk_number,
+                        total_chunks: logical_chunks_total,
                     }
-                    break;
+                    .into());
                 }
-            }
-
-            Ok(ImageUploadReceipt::new(
-                bytes_written,
-                chunks_written,
-                logical_chunks_sent,
-            ))
-        }
-        .await;
-
-        match session.unsubscribe_endpoint(endpoint).await {
-            Ok(()) => {}
-            Err(error) => {
-                if upload_result.is_ok() {
-                    return Err(error.into());
-                }
-                tracing::trace!(
-                    ?error,
-                    "failed to unsubscribe image-upload notifications cleanly"
-                );
+                break;
             }
         }
 
-        upload_result
+        drop(stream);
+        Ok(ImageUploadReceipt::new(
+            bytes_written,
+            chunks_written,
+            logical_chunks_sent,
+        ))
     }
 }
 
@@ -451,64 +436,36 @@ async fn apply_fragment_delay(delay: Duration) {
     }
 }
 
-#[instrument(skip(session), level = "trace")]
+#[instrument(skip(stream), level = "trace")]
 async fn drain_stale_notifications(
-    session: &DeviceSession,
-    endpoint: EndpointId,
+    stream: &mut NotificationSubscription,
 ) -> Result<(), ProtocolError> {
     for _attempt in 0..MAX_STALE_NOTIFICATION_DRAIN {
-        let mut observed_notification = false;
-        let drain_result = timeout(
-            DRAIN_NOTIFICATION_TIMEOUT,
-            session.run_notifications(endpoint, Some(1), |_index, _payload| {
-                observed_notification = true;
-            }),
-        )
-        .await;
-
-        match drain_result {
+        match timeout(DRAIN_NOTIFICATION_TIMEOUT, stream.next()).await {
             Err(_elapsed) => break,
-            Ok(Err(error)) => return Err(error.into()),
-            Ok(Ok(_summary)) => {
-                if !observed_notification {
-                    break;
-                }
-            }
+            Ok(None) => break,
+            Ok(Some(Err(error))) => return Err(error.into()),
+            Ok(Some(Ok(_message))) => {}
         }
     }
 
     Ok(())
 }
 
-#[instrument(skip(session), level = "trace", fields(timeout_ms = timeout_duration.as_millis()))]
+#[instrument(skip(stream), level = "trace", fields(timeout_ms = timeout_duration.as_millis()))]
 async fn wait_for_image_ack(
-    session: &DeviceSession,
+    stream: &mut NotificationSubscription,
     timeout_duration: Duration,
 ) -> Result<ImageAckOutcome, ProtocolError> {
-    let mut decoded_event: Option<Result<NotifyEvent, NotificationDecodeError>> = None;
-    let wait_result = timeout(
-        timeout_duration,
-        session.run_notifications(
-            EndpointId::ReadNotifyCharacteristic,
-            Some(1),
-            |_index, event| {
-                decoded_event = Some(event);
-            },
-        ),
-    )
-    .await;
-
-    match wait_result {
+    match timeout(timeout_duration, stream.next()).await {
         Err(_elapsed) => {
             let timeout_ms = u64::try_from(timeout_duration.as_millis()).unwrap_or(u64::MAX);
             Err(ImageUploadError::NotifyAckTimeout { timeout_ms }.into())
         }
-        Ok(Err(error)) => Err(error.into()),
-        Ok(Ok(_summary)) => {
-            let Some(event_result) = decoded_event else {
-                return Err(ImageUploadError::MissingNotifyAck.into());
-            };
-            let event = event_result?;
+        Ok(None) => Err(ImageUploadError::MissingNotifyAck.into()),
+        Ok(Some(Err(error))) => Err(error.into()),
+        Ok(Some(Ok(message))) => {
+            let event = message.event?;
             match event {
                 NotifyEvent::NextPackage(TransferFamily::Image) => Ok(ImageAckOutcome::Continue),
                 NotifyEvent::Finished(TransferFamily::Image) => Ok(ImageAckOutcome::Finished),
@@ -553,7 +510,7 @@ mod tests {
         let request = ImageUploadRequest::new(frame);
 
         assert_eq!(&[0x89, 0x50, 0x4E], request.payload());
-        assert_eq!(Duration::from_millis(20), request.per_fragment_delay());
+        assert_eq!(Duration::ZERO, request.per_fragment_delay());
         assert_eq!(Duration::from_secs(5), request.ack_timeout());
         Ok(())
     }

@@ -3,14 +3,16 @@ use std::io;
 
 use anyhow::Result;
 use serde::Serialize;
+use tokio_stream::StreamExt;
+use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
 use crate::cli::OutputFormat;
-use crate::hw::{HardwareClient, ListenSummary};
+use crate::hw::{HardwareClient, ListenSummary, NotificationRunSummary};
 use crate::notification::NotificationDecodeError;
 use crate::protocol::EndpointId;
 use crate::terminal::TerminalClient;
-use crate::{FoundDevice, NotifyEvent};
+use crate::{FoundDevice, InteractionError, NotifyEvent};
 
 use super::ui::{ListenNotificationView, ListenReadyView, ListenSummaryView, Painter};
 
@@ -106,11 +108,6 @@ where
             return Err(error.into());
         }
     };
-    if let Err(error) = session.subscribe_endpoint(endpoint).await {
-        session.close().await?;
-        return Err(error.into());
-    }
-
     match output_format {
         OutputFormat::Pretty => {
             let painter = Painter::new(terminal_client.stdout_is_terminal());
@@ -132,39 +129,73 @@ where
         }
     }
 
+    let cancel = CancellationToken::new();
+    let cancel_for_signal = cancel.clone();
+    let signal_task = tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            cancel_for_signal.cancel();
+        }
+    });
+
     let mut write_error: Option<io::Error> = None;
+    let mut stream_error: Option<InteractionError> = None;
+    let mut stream = match session
+        .notification_stream(endpoint, max_notifications, cancel)
+        .await
+    {
+        Ok(stream) => stream,
+        Err(error) => {
+            session.close().await?;
+            return Err(error.into());
+        }
+    };
 
-    let run_result = session
-        .run_notifications(endpoint, max_notifications, |index, event| {
-            if write_error.is_some() {
-                return;
+    while let Some(item) = stream.next().await {
+        let message = match item {
+            Ok(message) => message,
+            Err(error) => {
+                stream_error = Some(error);
+                break;
             }
-            let event_label = decode_event_label(event);
-            let result = match output_format {
-                OutputFormat::Pretty => {
-                    let painter = Painter::new(terminal_client.stdout_is_terminal());
-                    let view = ListenNotificationView::new(index, event_label, &painter);
-                    writeln!(out, "{view}")
-                }
-                OutputFormat::Json => serde_json::to_writer_pretty(
-                    &mut *out,
-                    &ListenEvent::Notification { index, event_label },
-                )
-                .map_err(io::Error::other)
-                .and_then(|()| writeln!(out)),
-            };
-            if let Err(error) = result {
-                write_error = Some(error);
-            }
-        })
-        .await;
+        };
 
-    if let Err(error) = session.unsubscribe_endpoint(endpoint).await {
-        tracing::trace!(?error, "failed to unsubscribe cleanly");
+        if write_error.is_some() {
+            break;
+        }
+
+        let event_label = decode_event_label(message.event);
+        let result = match output_format {
+            OutputFormat::Pretty => {
+                let painter = Painter::new(terminal_client.stdout_is_terminal());
+                let view = ListenNotificationView::new(message.index, event_label, &painter);
+                writeln!(out, "{view}")
+            }
+            OutputFormat::Json => serde_json::to_writer_pretty(
+                &mut *out,
+                &ListenEvent::Notification {
+                    index: message.index,
+                    event_label,
+                },
+            )
+            .map_err(io::Error::other)
+            .and_then(|()| writeln!(out)),
+        };
+        if let Err(error) = result {
+            write_error = Some(error);
+            break;
+        }
     }
+
+    signal_task.abort();
+
+    let run_result: Result<NotificationRunSummary, _> = stream.try_into();
+
     session.close().await?;
 
     if let Some(error) = write_error {
+        return Err(error.into());
+    }
+    if let Some(error) = stream_error {
         return Err(error.into());
     }
     let run_result = run_result?;

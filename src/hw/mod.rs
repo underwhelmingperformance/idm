@@ -14,10 +14,16 @@ mod session;
 
 pub(crate) use self::device_profile_resolver::{DeviceProfileResolver, DeviceRoutingProfile};
 pub use self::device_profile_resolver::{LedInfoResponse, TextPath};
+pub use self::fake_backend::{
+    AckAction, GifScenario, ImageScenario, ListenFixture, ListenNotification, ListenScenario,
+    ListenStreamBehaviour, ScanScenario, TextScenario,
+};
 pub(crate) use self::fake_backend::{
     FakeBackendConfig, HexPayload, NotificationPayloads, ScanFixture,
 };
-pub use self::hardware::{DeviceSession, HardwareClient, WriteMode};
+pub use self::hardware::{
+    DeviceSession, HardwareClient, NotificationMessage, NotificationSubscription, WriteMode,
+};
 pub(crate) use self::hardware::{
     fake_hardware_client, real_hardware_client, real_hardware_client_with_model_resolution,
 };

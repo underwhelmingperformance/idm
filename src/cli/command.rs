@@ -10,7 +10,8 @@ use crate::cli::image::ImageArgs;
 use crate::cli::listen::ListenArgs;
 use crate::error::CliConfigError;
 use crate::hw::{
-    FakeBackendConfig, HexPayload, ModelResolutionConfig, NotificationPayloads, ScanFixture,
+    FakeBackendConfig, GifScenario, HexPayload, ImageScenario, ListenScenario,
+    ModelResolutionConfig, NotificationPayloads, ScanFixture, ScanScenario, TextScenario,
 };
 
 /// Command-line options for the iDotMatrix BLE tool.
@@ -45,6 +46,8 @@ pub struct Args {
     /// terminal, `json` otherwise.
     #[arg(long, global = true, value_enum)]
     output_format: Option<OutputFormat>,
+    #[arg(skip)]
+    fake_args_override: Option<FakeArgs>,
     #[command(subcommand)]
     command: Command,
 }
@@ -71,6 +74,7 @@ impl Args {
             model_overrides_path: None,
             log_level: None,
             output_format: None,
+            fake_args_override: None,
             command,
         }
     }
@@ -78,22 +82,8 @@ impl Args {
     /// Enables fake backend mode with pre-parsed fake configuration.
     #[must_use]
     pub fn with_fake(mut self, fake: FakeArgs) -> Self {
-        let FakeArgs {
-            scan_fixture,
-            initial_read,
-            notifications,
-            discovery_delay,
-            model_led_type,
-            model_overrides_path,
-        } = fake;
-
         self.fake = true;
-        self.fake_scan = Some(scan_fixture);
-        self.fake_read = initial_read;
-        self.fake_notifications = notifications;
-        self.fake_discovery_delay = Some(discovery_delay);
-        self.model_led_type = model_led_type;
-        self.model_overrides_path = model_overrides_path;
+        self.fake_args_override = Some(fake);
         self
     }
 
@@ -131,18 +121,30 @@ impl Args {
             model_overrides_path,
             log_level: _,
             output_format: _,
+            fake_args_override,
             command,
         } = self;
 
-        let fake_args = if fake {
+        let fake_args = if let Some(fake_args) = fake_args_override {
+            Some(fake_args)
+        } else if fake {
             let Some(scan_fixture) = fake_scan else {
                 return Err(CliConfigError::MissingFakeScanFixture.into());
             };
+            let listen = match fake_notifications {
+                Some(notifications) => ListenScenario::from(notifications),
+                None => ListenScenario::default(),
+            };
             Some(FakeArgs {
-                scan_fixture,
+                scan: ScanScenario::from((
+                    scan_fixture,
+                    fake_discovery_delay.unwrap_or(Duration::ZERO),
+                )),
                 initial_read: fake_read,
-                notifications: fake_notifications,
-                discovery_delay: fake_discovery_delay.unwrap_or(Duration::ZERO),
+                listen_scenario: listen,
+                gif: GifScenario::default(),
+                image: ImageScenario::default(),
+                text: TextScenario::default(),
                 model_led_type,
                 model_overrides_path,
             })
@@ -192,16 +194,20 @@ impl LogLevel {
 }
 
 /// Fake backend arguments for programmatic runs.
-#[derive(Debug, Builder)]
+#[derive(Debug, Clone, Builder)]
 pub struct FakeArgs {
-    #[builder(with = |value: &str| -> std::result::Result<_, crate::error::FixtureError> { value.parse() })]
-    scan_fixture: ScanFixture,
+    #[builder(with = |value: &str| -> std::result::Result<_, crate::error::FixtureError> { ScanScenario::from_fixture(value) })]
+    scan: ScanScenario,
     #[builder(with = |value: &str| -> std::result::Result<_, crate::error::FixtureError> { value.parse() })]
     initial_read: Option<HexPayload>,
-    #[builder(with = |value: &str| -> std::result::Result<_, crate::error::FixtureError> { value.parse() })]
-    notifications: Option<NotificationPayloads>,
     #[builder(default)]
-    discovery_delay: Duration,
+    listen_scenario: ListenScenario,
+    #[builder(default)]
+    gif: GifScenario,
+    #[builder(default)]
+    image: ImageScenario,
+    #[builder(default)]
+    text: TextScenario,
     model_led_type: Option<u8>,
     model_overrides_path: Option<PathBuf>,
 }
@@ -209,24 +215,49 @@ pub struct FakeArgs {
 impl FakeArgs {
     pub(crate) fn into_backend_config(self) -> FakeBackendConfig {
         let Self {
-            scan_fixture,
+            scan,
             initial_read,
-            notifications,
-            discovery_delay,
+            listen_scenario,
+            gif,
+            image,
+            text,
             model_led_type,
             model_overrides_path,
         } = self;
 
         FakeBackendConfig::builder()
-            .scan_fixture(scan_fixture)
+            .scan(scan)
             .maybe_initial_read(initial_read)
-            .maybe_notifications(notifications)
-            .discovery_delay(discovery_delay)
+            .listen(listen_scenario)
+            .gif(gif)
+            .image(image)
+            .text(text)
             .model_resolution(ModelResolutionConfig::new(
                 model_led_type,
                 model_overrides_path,
             ))
             .build()
+    }
+}
+
+impl<S: fake_args_builder::State> FakeArgsBuilder<S> {
+    /// Sets fake listen-notification behaviour from a scenario or payload fixture.
+    ///
+    /// ```
+    /// let _args = idm::FakeArgs::builder()
+    ///     .scan("hci0|AA:BB:CC|IDM-Clock|-43")
+    ///     .expect("scan fixture should parse")
+    ///     .listen(idm::ListenFixture::TextTransferHappyPath)
+    ///     .build();
+    /// ```
+    pub fn listen(
+        self,
+        listen: impl Into<ListenScenario>,
+    ) -> FakeArgsBuilder<fake_args_builder::SetListenScenario<S>>
+    where
+        S::ListenScenario: fake_args_builder::IsUnset,
+    {
+        self.listen_scenario(listen.into())
     }
 }
 

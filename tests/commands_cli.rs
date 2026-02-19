@@ -47,7 +47,7 @@ async fn run_with_argv<const N: usize>(argv: [&str; N]) -> anyhow::Result<String
 #[tokio::test]
 async fn inspect_command_prints_gatt_details_from_fake_backend() -> anyhow::Result<()> {
     let fake = idm::FakeArgs::builder()
-        .scan_fixture("hci1|00:11:22|Speaker|-65;hci0|AA:BB:CC|IDM-Clock|-43")?
+        .scan("hci1|00:11:22|Speaker|-65;hci0|AA:BB:CC|IDM-Clock|-43")?
         .build();
     let args = idm::Args::new(idm::Command::Inspect).with_fake(fake);
 
@@ -60,9 +60,9 @@ async fn inspect_command_prints_gatt_details_from_fake_backend() -> anyhow::Resu
 #[tokio::test]
 async fn listen_command_reads_once_then_streams_notifications() -> anyhow::Result<()> {
     let fake = idm::FakeArgs::builder()
-        .scan_fixture("hci0|AA:BB:CC|IDM-Clock|-43")?
+        .scan("hci0|AA:BB:CC|IDM-Clock|-43")?
         .initial_read("DEADBEEF")?
-        .notifications("0500010001,0500010003,AA55")?
+        .listen(idm::ListenFixture::GifTransferHappyPath)
         .build();
     let args = idm::Args::new(idm::Command::Listen(idm::ListenArgs::new(Some(2)))).with_fake(fake);
 
@@ -74,7 +74,7 @@ async fn listen_command_reads_once_then_streams_notifications() -> anyhow::Resul
 
 #[test]
 fn inspect_command_fails_for_invalid_fixture() {
-    let result = idm::FakeArgs::builder().scan_fixture("invalid-record");
+    let result = idm::FakeArgs::builder().scan("invalid-record");
     assert!(matches!(
         result,
         Err(idm::FixtureError::InvalidRecordFieldCount)
@@ -99,14 +99,17 @@ fn control_brightness_rejects_out_of_range_input() {
 
 #[tokio::test]
 async fn inspect_command_applies_fake_discovery_delay() -> anyhow::Result<()> {
-    let fake = idm::FakeArgs::builder()
-        .scan_fixture("hci0|AA:BB:CC|IDM-Clock|-43")?
-        .discovery_delay(Duration::from_millis(40))
-        .build();
-    let args = idm::Args::new(idm::Command::Inspect).with_fake(fake);
-
     let started_at = Instant::now();
-    let _ = run_with_parsed_args(args).await?;
+    let _ = run_with_argv([
+        "idm",
+        "--fake",
+        "--fake-scan",
+        "hci0|AA:BB:CC|IDM-Clock|-43",
+        "--fake-discovery-delay",
+        "40ms",
+        "inspect",
+    ])
+    .await?;
 
     assert!(started_at.elapsed() >= Duration::from_millis(40));
     Ok(())
@@ -220,19 +223,12 @@ async fn image_command_uploads_gif_payload() -> anyhow::Result<()> {
         ],
     )?;
 
-    let file_path_string = file_path.to_string_lossy().to_string();
-    let stdout = run_with_argv([
-        "idm",
-        "--fake",
-        "--fake-scan",
-        "hci0|AA:BB:CC|IDM-16-Clock|-43",
-        "--fake-notifications",
-        "0500010003",
-        "image",
-        &file_path_string,
-    ])
-    .await?;
+    let fake = idm::FakeArgs::builder()
+        .scan("hci0|AA:BB:CC|IDM-16-Clock|-43")?
+        .build();
+    let args = idm::Args::new(idm::Command::Image(idm::ImageArgs::new(&file_path))).with_fake(fake);
 
+    let stdout = run_with_parsed_args(args).await?;
     assert_snapshot!("image_command_uploads_gif_stdout", stdout.trim_end());
 
     std::fs::remove_file(file_path)?;
@@ -260,19 +256,12 @@ async fn image_command_uploads_transformed_payload() -> anyhow::Result<()> {
     )?;
     std::fs::write(&file_path, encoded)?;
 
-    let file_path_string = file_path.to_string_lossy().to_string();
-    let stdout = run_with_argv([
-        "idm",
-        "--fake",
-        "--fake-scan",
-        "hci0|AA:BB:CC|IDM-16-Clock|-43",
-        "--fake-notifications",
-        "0500020003",
-        "image",
-        &file_path_string,
-    ])
-    .await?;
+    let fake = idm::FakeArgs::builder()
+        .scan("hci0|AA:BB:CC|IDM-16-Clock|-43")?
+        .build();
+    let args = idm::Args::new(idm::Command::Image(idm::ImageArgs::new(&file_path))).with_fake(fake);
 
+    let stdout = run_with_parsed_args(args).await?;
     assert_snapshot!(
         "image_command_uploads_transformed_stdout",
         stdout.trim_end()

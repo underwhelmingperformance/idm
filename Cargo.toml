@@ -32,8 +32,9 @@ tabled = { version = "0.20.0", features = ["ansi"] }
 terminal_size = "0.4.3"
 thiserror = "2.0.18"
 time = "0.3.47"
-tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread", "signal", "time"] }
-tokio-stream = "0.1.18"
+tokio = { version = "1.49.0", features = ["macros", "rt-multi-thread", "signal", "test-util", "time"] }
+tokio-stream = { version = "0.1.18", features = ["sync"] }
+tokio-util = "0.7.18"
 tracing = "0.1.44"
 tracing-indicatif = "0.3.14"
 tracing-opentelemetry = "0.32.1"

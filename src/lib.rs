@@ -29,11 +29,13 @@ pub use handlers::{
     TextUploadRequest, TimeSyncHandler, UploadPacing, UploadReceipt,
 };
 pub use hw::{
-    AmbiguousShape, CharacteristicInfo, DeviceProfile, DeviceSession, EndpointPresence,
-    FoundDevice, GattProfile, GifHeaderProfile, HardwareClient, ImageUploadMode, InspectReport,
-    LedInfoResponse, ListenStopReason, ListenSummary, ModelProfile, ModelResolutionConfig,
-    NotificationRunSummary, PanelDimensions, PanelSize, ScanIdentity, ScanModelHandler,
-    ServiceInfo, SessionMetadata, TextPath, WriteMode,
+    AckAction, AmbiguousShape, CharacteristicInfo, DeviceProfile, DeviceSession, EndpointPresence,
+    FoundDevice, GattProfile, GifHeaderProfile, GifScenario, HardwareClient, ImageScenario,
+    ImageUploadMode, InspectReport, LedInfoResponse, ListenFixture, ListenNotification,
+    ListenScenario, ListenStopReason, ListenStreamBehaviour, ListenSummary, ModelProfile,
+    ModelResolutionConfig, NotificationMessage, NotificationRunSummary, NotificationSubscription,
+    PanelDimensions, PanelSize, ScanIdentity, ScanModelHandler, ScanScenario, ServiceInfo,
+    SessionMetadata, TextPath, TextScenario, WriteMode,
 };
 pub use media::{
     GifAnimation, GifAnimationError, ImagePreparationError, ImagePreprocessor, PreparedImageUpload,

@@ -344,6 +344,8 @@ Behaviour:
   dimensions differ.
 - Top-level `image` command detects GIF input and routes to this handler.
 - Use notification-driven flow control.
+- Default transport pacing uses no per-fragment sleep; callers may opt in with
+  explicit per-fragment delay when needed.
 - Drain stale notify events before upload to reduce cross-command ACK bleed.
 - Consume typed notification events from the session API rather than decoding
   raw notify payload bytes in handler code.
@@ -373,6 +375,8 @@ Behaviour:
 - Keep file/container decoding and resize/rotation outside this handler.
 - Align tail/profile bytes to target firmware behaviour.
 - Reuse chunker and flow-control primitives from GIF handler.
+- Default transport pacing uses no per-fragment sleep; callers may opt in with
+  explicit per-fragment delay when needed.
 - Consume typed notification events from the session API rather than decoding
   raw notify payload bytes in handler code.
 - CLI wired via top-level `idm image <image_file>`.

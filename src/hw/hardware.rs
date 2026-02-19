@@ -1,10 +1,16 @@
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+
 use async_trait::async_trait;
+use tokio_stream::Stream;
+use tokio_util::sync::CancellationToken;
 use tracing::{info, instrument, trace};
 
 use super::btleplug_backend::BtleplugBackend;
 use super::fake_backend::{FakeBackend, FakeBackendConfig};
 use super::model::{
-    EndpointPresence, FoundDevice, InspectReport, ListenSummary, NotificationRunSummary,
+    EndpointPresence, FoundDevice, InspectReport, ListenStopReason, NotificationRunSummary,
 };
 use super::model_overrides::ModelResolutionConfig;
 use super::profile::DeviceProfile;
@@ -39,9 +45,12 @@ pub enum WriteMode {
     WithoutResponse,
 }
 
+/// Boxed stream of raw notification payloads from a BLE backend.
+pub(crate) type PayloadStream = Pin<Box<dyn Stream<Item = Vec<u8>> + Send>>;
+
 /// Connected session operations provided by concrete transports.
-#[async_trait(?Send)]
-pub(crate) trait ConnectedBleSession: Send {
+#[async_trait]
+pub(crate) trait ConnectedBleSession: Send + Sync {
     /// Returns connected device details.
     fn device(&self) -> &FoundDevice;
 
@@ -77,16 +86,19 @@ pub(crate) trait ConnectedBleSession: Send {
     /// Unsubscribes notifications for an endpoint.
     async fn unsubscribe_endpoint(&self, endpoint: EndpointId) -> Result<(), InteractionError>;
 
-    /// Runs the notification stream for one endpoint.
-    async fn run_notifications(
+    /// Returns a raw payload stream for one endpoint.
+    ///
+    /// The caller must have already subscribed via [`subscribe_endpoint`] before
+    /// calling this method.  Each item is the raw `Vec<u8>` payload of one
+    /// BLE notification for the given endpoint, with UUID filtering applied
+    /// by the backend.
+    async fn notification_payloads(
         &self,
         endpoint: EndpointId,
-        max_notifications: Option<usize>,
-        on_notification: &mut dyn FnMut(usize, Vec<u8>),
-    ) -> Result<NotificationRunSummary, InteractionError>;
+    ) -> Result<PayloadStream, InteractionError>;
 
     /// Closes the session and disconnects from the peripheral.
-    async fn close(self: Box<Self>) -> Result<(), InteractionError>;
+    async fn close(self: Arc<Self>) -> Result<(), InteractionError>;
 }
 
 /// Low-level transport capable of establishing iDotMatrix sessions.
@@ -96,7 +108,7 @@ pub(crate) trait BleTransport: Send {
     async fn connect_first_matching(
         self,
         name_prefix: &str,
-    ) -> Result<Box<dyn ConnectedBleSession>, InteractionError>;
+    ) -> Result<Arc<dyn ConnectedBleSession>, InteractionError>;
 }
 
 /// Session builder over a selected BLE transport.
@@ -140,9 +152,9 @@ impl BleTransport for BtleplugBackend {
     async fn connect_first_matching(
         self,
         name_prefix: &str,
-    ) -> Result<Box<dyn ConnectedBleSession>, InteractionError> {
+    ) -> Result<Arc<dyn ConnectedBleSession>, InteractionError> {
         let session = self.connect_first_matching_device(name_prefix).await?;
-        Ok(Box::new(session))
+        Ok(Arc::new(session))
     }
 }
 
@@ -151,9 +163,9 @@ impl BleTransport for FakeBackend {
     async fn connect_first_matching(
         self,
         name_prefix: &str,
-    ) -> Result<Box<dyn ConnectedBleSession>, InteractionError> {
+    ) -> Result<Arc<dyn ConnectedBleSession>, InteractionError> {
         let session = self.connect_first_matching_device(name_prefix).await?;
-        Ok(Box::new(session))
+        Ok(Arc::new(session))
     }
 }
 
@@ -218,7 +230,144 @@ impl HardwareClient for FakeHardwareClient {
 
 /// A connected iDotMatrix session.
 pub struct DeviceSession {
-    session: Box<dyn ConnectedBleSession>,
+    session: Arc<dyn ConnectedBleSession>,
+}
+
+/// One typed notification item emitted by [`DeviceSession::notification_stream`].
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct NotificationMessage {
+    /// One-based index of the notification in this stream.
+    pub index: usize,
+    /// Parsed notification event or decode error for the payload.
+    pub event: Result<NotifyEvent, NotificationDecodeError>,
+}
+
+/// Single-consumer notification stream tied to one endpoint subscription.
+pub struct NotificationSubscription {
+    payloads: Option<PayloadStream>,
+    session: Arc<dyn ConnectedBleSession>,
+    endpoint: EndpointId,
+    max_notifications: Option<usize>,
+    cancel: CancellationToken,
+    received: usize,
+    summary: Option<NotificationRunSummary>,
+}
+
+impl Stream for NotificationSubscription {
+    type Item = Result<NotificationMessage, InteractionError>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if this.payloads.is_none() {
+            return Poll::Ready(None);
+        }
+
+        if let Some(0) = this.max_notifications {
+            this.payloads = None;
+            this.summary = Some(NotificationRunSummary::new(
+                0,
+                ListenStopReason::ReachedLimit(0),
+            ));
+            return Poll::Ready(None);
+        }
+
+        {
+            let cancel_fut = std::pin::pin!(this.cancel.cancelled());
+            if cancel_fut.poll(cx).is_ready() {
+                this.payloads = None;
+                this.summary = Some(NotificationRunSummary::new(
+                    this.received,
+                    ListenStopReason::Interrupted,
+                ));
+                return Poll::Ready(None);
+            }
+        }
+
+        let poll_result = this.payloads.as_mut().unwrap().as_mut().poll_next(cx);
+        match poll_result {
+            Poll::Ready(Some(payload)) => {
+                this.received += 1;
+                let message = NotificationMessage {
+                    index: this.received,
+                    event: NotificationHandler::decode(&payload),
+                };
+
+                if let Some(limit) = this.max_notifications
+                    && this.received >= limit
+                {
+                    this.payloads = None;
+                    this.summary = Some(NotificationRunSummary::new(
+                        this.received,
+                        ListenStopReason::ReachedLimit(limit),
+                    ));
+                }
+
+                Poll::Ready(Some(Ok(message)))
+            }
+            Poll::Ready(None) => {
+                this.payloads = None;
+                this.summary = Some(NotificationRunSummary::new(
+                    this.received,
+                    ListenStopReason::NotificationStreamClosed,
+                ));
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+/// Converts a completed notification subscription into its run summary.
+///
+/// Returns an error when the stream has not yet reached completion.
+///
+/// ```no_run
+/// # async fn demo(session: &idm::DeviceSession) -> Result<(), idm::InteractionError> {
+/// use std::convert::TryInto as _;
+/// use tokio_stream::StreamExt;
+/// use tokio_util::sync::CancellationToken;
+///
+/// let mut stream = session
+///     .notification_stream(
+///         idm::EndpointId::ReadNotifyCharacteristic,
+///         Some(1),
+///         CancellationToken::new(),
+///     )
+///     .await?;
+///
+/// while stream.next().await.is_some() {}
+/// let summary: idm::NotificationRunSummary = stream.try_into()?;
+/// let _ = summary.received_notifications();
+/// # Ok(())
+/// # }
+/// ```
+impl TryFrom<NotificationSubscription> for NotificationRunSummary {
+    type Error = InteractionError;
+
+    fn try_from(mut subscription: NotificationSubscription) -> Result<Self, Self::Error> {
+        subscription
+            .summary
+            .take()
+            .ok_or(InteractionError::NotificationStreamIncomplete)
+    }
+}
+
+impl Drop for NotificationSubscription {
+    fn drop(&mut self) {
+        let endpoint = self.endpoint;
+        let session = Arc::clone(&self.session);
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                if let Err(error) = session.unsubscribe_endpoint(endpoint).await {
+                    trace!(
+                        ?error,
+                        ?endpoint,
+                        "failed to unsubscribe notification stream cleanly"
+                    );
+                }
+            });
+        }
+    }
 }
 
 impl DeviceSession {
@@ -312,76 +461,44 @@ impl DeviceSession {
         self.session.unsubscribe_endpoint(endpoint).await
     }
 
-    /// Runs notification listening for one endpoint.
+    /// Creates a typed notification stream for one endpoint.
+    ///
+    /// The stream subscribes before yielding the first item and performs
+    /// best-effort unsubscription when the stream completes or is dropped.
+    ///
+    /// Pass a `cancel` token to allow external interruption (e.g. Ctrl-C).
+    /// When the token is cancelled, the stream terminates with
+    /// [`ListenStopReason::Interrupted`].
     ///
     /// # Errors
     ///
-    /// Returns an error if notification transport handling fails.
-    #[instrument(
-        skip(self, on_notification),
-        level = "trace",
-        fields(?endpoint, ?max_notifications)
-    )]
-    pub async fn run_notifications<F>(
+    /// Returns an error if the initial endpoint subscription fails.
+    #[instrument(skip(self, cancel), level = "trace", fields(?endpoint, ?max_notifications))]
+    pub async fn notification_stream(
         &self,
         endpoint: EndpointId,
         max_notifications: Option<usize>,
-        mut on_notification: F,
-    ) -> Result<NotificationRunSummary, InteractionError>
-    where
-        F: FnMut(usize, Result<NotifyEvent, NotificationDecodeError>),
-    {
-        let mut adapter = |index: usize, payload: Vec<u8>| {
-            on_notification(index, NotificationHandler::decode(&payload))
+        cancel: CancellationToken,
+    ) -> Result<NotificationSubscription, InteractionError> {
+        self.session.subscribe_endpoint(endpoint).await?;
+
+        let payloads = match self.session.notification_payloads(endpoint).await {
+            Ok(payloads) => payloads,
+            Err(error) => {
+                let _ = self.session.unsubscribe_endpoint(endpoint).await;
+                return Err(error);
+            }
         };
-        self.session
-            .run_notifications(endpoint, max_notifications, &mut adapter)
-            .await
-    }
 
-    /// Runs the standard iDotMatrix listen flow on `fa03` and closes the session.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if reads, subscriptions, notification handling, or teardown fails.
-    #[instrument(
-        skip(self, on_notification),
-        level = "debug",
-        fields(?max_notifications)
-    )]
-    pub async fn run_listen<F>(
-        self,
-        max_notifications: Option<usize>,
-        mut on_notification: F,
-    ) -> Result<ListenSummary, InteractionError>
-    where
-        F: FnMut(usize, Result<NotifyEvent, NotificationDecodeError>),
-    {
-        let device = self.device().clone();
-        let endpoint = EndpointId::ReadNotifyCharacteristic;
-
-        let initial_read = self.read_endpoint_optional(endpoint).await?;
-        self.subscribe_endpoint(endpoint).await?;
-
-        let run_result = self
-            .run_notifications(endpoint, max_notifications, |index, event| {
-                on_notification(index, event);
-            })
-            .await;
-
-        if let Err(error) = self.unsubscribe_endpoint(endpoint).await {
-            trace!(?error, "failed to unsubscribe cleanly");
-        }
-
-        self.close().await?;
-
-        let run_result = run_result?;
-        Ok(ListenSummary::new(
-            device,
-            initial_read,
-            run_result.received_notifications(),
-            run_result.stop_reason().clone(),
-        ))
+        Ok(NotificationSubscription {
+            payloads: Some(payloads),
+            session: Arc::clone(&self.session),
+            endpoint,
+            max_notifications,
+            cancel,
+            received: 0,
+            summary: None,
+        })
     }
 
     /// Closes the session and disconnects.

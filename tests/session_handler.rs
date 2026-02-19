@@ -1,10 +1,12 @@
 use assert_matches::assert_matches;
 use pretty_assertions::assert_eq;
+use tokio_stream::StreamExt;
+use tokio_util::sync::CancellationToken;
 
 #[tokio::test]
 async fn fake_session_connect_populates_report_metadata() -> anyhow::Result<()> {
     let fake_args = idm::FakeArgs::builder()
-        .scan_fixture("hci1|00:11:22|Speaker|-65;hci0|AA:BB:CC|IDM-Clock|-43")?
+        .scan("hci1|00:11:22|Speaker|-65;hci0|AA:BB:CC|IDM-Clock|-43")?
         .build();
     let client = idm::fake_hardware_client(fake_args);
 
@@ -75,81 +77,147 @@ async fn fake_session_connect_populates_report_metadata() -> anyhow::Result<()> 
 }
 
 #[tokio::test]
-async fn fake_session_run_notifications_respects_limit() -> anyhow::Result<()> {
+async fn fake_session_notification_stream_emits_typed_items() -> anyhow::Result<()> {
     let fake_args = idm::FakeArgs::builder()
-        .scan_fixture("hci0|AA:BB:CC|IDM-Clock|-43")?
-        .notifications("0500010001,0500010003,AA55")?
+        .scan("hci0|AA:BB:CC|IDM-Clock|-43")?
+        .listen(idm::ListenFixture::TextTransferHappyPath)
         .build();
     let client = idm::fake_hardware_client(fake_args);
 
     let session = client.connect_first_device("IDM-").await?;
-    session
-        .subscribe_endpoint(idm::EndpointId::ReadNotifyCharacteristic)
-        .await?;
-
-    let mut received = Vec::new();
-    let run_summary = session
-        .run_notifications(
+    let mut stream = session
+        .notification_stream(
             idm::EndpointId::ReadNotifyCharacteristic,
             Some(2),
-            |index, event| {
-                received.push((index, event));
-            },
+            CancellationToken::new(),
         )
         .await?;
 
-    assert_eq!(2, run_summary.received_notifications());
-    assert_matches!(
-        run_summary.stop_reason(),
-        &idm::ListenStopReason::ReachedLimit(2)
+    let first = stream
+        .next()
+        .await
+        .expect("stream should emit first item")?;
+    let second = stream
+        .next()
+        .await
+        .expect("stream should emit second item")?;
+    let ended = stream.next().await;
+
+    assert_eq!(
+        idm::NotificationMessage {
+            index: 1,
+            event: Ok(idm::NotifyEvent::NextPackage(idm::TransferFamily::Text)),
+        },
+        first
     );
     assert_eq!(
-        vec![
-            (
-                1,
-                Ok(idm::NotifyEvent::NextPackage(idm::TransferFamily::Gif))
-            ),
-            (2, Ok(idm::NotifyEvent::Finished(idm::TransferFamily::Gif))),
-        ],
-        received
+        idm::NotificationMessage {
+            index: 2,
+            event: Ok(idm::NotifyEvent::Finished(idm::TransferFamily::Text)),
+        },
+        second
+    );
+    assert!(ended.is_none());
+    let summary: idm::NotificationRunSummary = stream.try_into()?;
+    assert_eq!(2, summary.received_notifications());
+    assert_matches!(
+        summary.stop_reason(),
+        &idm::ListenStopReason::ReachedLimit(2)
     );
 
-    session
-        .unsubscribe_endpoint(idm::EndpointId::ReadNotifyCharacteristic)
-        .await?;
     session.close().await?;
-
     Ok(())
 }
 
 #[tokio::test]
-async fn fake_session_run_listen_returns_summary() -> anyhow::Result<()> {
+async fn fake_session_notification_stream_into_summary_requires_completion() -> anyhow::Result<()> {
     let fake_args = idm::FakeArgs::builder()
-        .scan_fixture("hci0|AA:BB:CC|IDM-Clock|-43")?
-        .initial_read("DEADBEEF")?
-        .notifications("AA55,BB66")?
+        .scan("hci0|AA:BB:CC|IDM-Clock|-43")?
+        .listen(idm::ListenFixture::TextTransferHappyPath)
         .build();
     let client = idm::fake_hardware_client(fake_args);
 
     let session = client.connect_first_device("IDM-").await?;
-    let mut received = Vec::new();
+    let stream = session
+        .notification_stream(
+            idm::EndpointId::ReadNotifyCharacteristic,
+            Some(2),
+            CancellationToken::new(),
+        )
+        .await?;
+    let result: Result<idm::NotificationRunSummary, idm::InteractionError> = stream.try_into();
+    let error = result.expect_err("summary conversion should fail before stream completion");
+    assert_matches!(error, idm::InteractionError::NotificationStreamIncomplete);
 
-    let summary = session
-        .run_listen(Some(1), |index, event| {
-            received.push((index, event));
-        })
+    session.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn fake_session_notification_stream_zero_limit_yields_nothing() -> anyhow::Result<()> {
+    let fake_args = idm::FakeArgs::builder()
+        .scan("hci0|AA:BB:CC|IDM-Clock|-43")?
+        .listen(idm::ListenFixture::TextTransferHappyPath)
+        .build();
+    let client = idm::fake_hardware_client(fake_args);
+
+    let session = client.connect_first_device("IDM-").await?;
+    let mut stream = session
+        .notification_stream(
+            idm::EndpointId::ReadNotifyCharacteristic,
+            Some(0),
+            CancellationToken::new(),
+        )
         .await?;
 
-    assert_eq!(Some(&[0xDE, 0xAD, 0xBE, 0xEF][..]), summary.initial_read());
-    assert_eq!(1, summary.received_notifications());
+    let ended = stream.next().await;
+    assert!(ended.is_none(), "stream with limit 0 should emit nothing");
+
+    let summary: idm::NotificationRunSummary = stream.try_into()?;
+    assert_eq!(0, summary.received_notifications());
     assert_matches!(
         summary.stop_reason(),
-        &idm::ListenStopReason::ReachedLimit(1)
-    );
-    assert_eq!(
-        vec![(1, Ok(idm::NotifyEvent::Unknown(vec![0xAA, 0x55])))],
-        received
+        &idm::ListenStopReason::ReachedLimit(0)
     );
 
+    session.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn fake_session_notification_stream_cancel_produces_interrupted() -> anyhow::Result<()> {
+    let fake_args = idm::FakeArgs::builder()
+        .scan("hci0|AA:BB:CC|IDM-Clock|-43")?
+        .listen(idm::ListenFixture::TextTransferHappyPath)
+        .build();
+    let client = idm::fake_hardware_client(fake_args);
+
+    let session = client.connect_first_device("IDM-").await?;
+    let cancel = CancellationToken::new();
+
+    let mut stream = session
+        .notification_stream(
+            idm::EndpointId::ReadNotifyCharacteristic,
+            None,
+            cancel.clone(),
+        )
+        .await?;
+
+    let first = stream
+        .next()
+        .await
+        .expect("stream should emit first item")?;
+    assert_eq!(1, first.index);
+
+    cancel.cancel();
+
+    let ended = stream.next().await;
+    assert!(ended.is_none());
+
+    let summary: idm::NotificationRunSummary = stream.try_into()?;
+    assert_eq!(1, summary.received_notifications());
+    assert_matches!(summary.stop_reason(), &idm::ListenStopReason::Interrupted);
+
+    session.close().await?;
     Ok(())
 }

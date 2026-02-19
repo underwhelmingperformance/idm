@@ -1,31 +1,114 @@
+use std::collections::VecDeque;
 use std::str::FromStr;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use bon::Builder;
+use strum_macros::EnumString;
 use tokio::time::sleep;
 use tracing::instrument;
 
 use super::DeviceProfile;
-use super::hardware::{ConnectedBleSession, WriteMode, missing_required_endpoints};
+use super::hardware::{ConnectedBleSession, PayloadStream, WriteMode, missing_required_endpoints};
 use super::model::{
-    CharacteristicInfo, EndpointPresence, FoundDevice, InspectReport, ListenStopReason,
-    NotificationRunSummary, ServiceInfo, SessionMetadata,
+    CharacteristicInfo, EndpointPresence, FoundDevice, InspectReport, ServiceInfo, SessionMetadata,
 };
 use super::model_overrides::{ModelResolutionConfig, is_supported_led_type};
 use super::profile::{resolve_device_profile, resolve_device_routing_profile};
 use super::scan_model::ScanModelHandler;
 use super::session::{FA_SERVICE_UUID, FA_WRITE_UUID, negotiate_session_endpoints};
 use crate::error::{FixtureError, InteractionError};
+use crate::notification::{NotifyEvent, TransferFamily};
 use crate::protocol::{self, EndpointId};
 
 const DEFAULT_INITIAL_READ: [u8; 5] = [0x05, 0x00, 0x01, 0x00, 0x01];
-const DEFAULT_NOTIFICATIONS: [[u8; 5]; 2] = [
-    [0x05, 0x00, 0x03, 0x00, 0x01],
-    [0x05, 0x00, 0x03, 0x00, 0x03],
-];
 const DEFAULT_WRITE_WITHOUT_RESPONSE_LIMIT: Option<usize> =
     Some(protocol::TRANSPORT_CHUNK_MTU_READY);
+const NOTIFY_PREFIX_LEN: u8 = 0x05;
+const NOTIFY_PREFIX_NS: u8 = 0x00;
+const STATUS_NEXT_PACKAGE: u8 = 0x01;
+const STATUS_FINISHED: u8 = 0x03;
+const SCHEDULE_SETUP_ID: u8 = 0x05;
+const SCHEDULE_MASTER_SWITCH_ID: u8 = 0x07;
+const SCHEDULE_NS: u8 = 0x80;
+const SCREEN_LIGHT_TIMEOUT_ID: u8 = 0x0F;
+const GIF_COMMAND_ID: u8 = 0x01;
+const IMAGE_COMMAND_ID: u8 = 0x02;
+const TEXT_COMMAND_ID: u8 = 0x03;
+const COMMAND_NS: u8 = 0x00;
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+struct NotificationCode {
+    id: u8,
+    ns: u8,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+struct NotificationFrame {
+    code: NotificationCode,
+    status: u8,
+}
+
+impl NotificationFrame {
+    fn into_payload(self) -> Vec<u8> {
+        vec![
+            NOTIFY_PREFIX_LEN,
+            NOTIFY_PREFIX_NS,
+            self.code.id,
+            self.code.ns,
+            self.status,
+        ]
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum UploadCommand {
+    Gif,
+    Image,
+    Text,
+}
+
+impl TryFrom<(u8, u8)> for UploadCommand {
+    type Error = ();
+
+    fn try_from(value: (u8, u8)) -> Result<Self, Self::Error> {
+        match value {
+            (GIF_COMMAND_ID, COMMAND_NS) => Ok(Self::Gif),
+            (IMAGE_COMMAND_ID, COMMAND_NS) => Ok(Self::Image),
+            (TEXT_COMMAND_ID, COMMAND_NS) => Ok(Self::Text),
+            _ => Err(()),
+        }
+    }
+}
+
+impl From<UploadCommand> for TransferFamily {
+    fn from(value: UploadCommand) -> Self {
+        match value {
+            UploadCommand::Gif => TransferFamily::Gif,
+            UploadCommand::Image => TransferFamily::Image,
+            UploadCommand::Text => TransferFamily::Text,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum HeaderChunkFlag {
+    First,
+    Continuation,
+}
+
+impl TryFrom<u8> for HeaderChunkFlag {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0x00 => Ok(Self::First),
+            0x02 => Ok(Self::Continuation),
+            _ => Err(()),
+        }
+    }
+}
 
 /// Parsed fake scan fixture records.
 #[derive(Debug, Clone, derive_more::Into)]
@@ -63,6 +146,265 @@ pub(crate) struct NotificationPayloads {
     payloads: Vec<Vec<u8>>,
 }
 
+/// Fake scan behaviour and fixture-backed discovery records.
+#[derive(Debug, Clone, Builder)]
+pub struct ScanScenario {
+    #[builder(with = |value: &str| -> std::result::Result<_, crate::error::FixtureError> { value.parse() })]
+    fixture: ScanFixture,
+    #[builder(default)]
+    discovery_delay: Duration,
+}
+
+impl ScanScenario {
+    /// Parses a semicolon-delimited fake scan fixture into a scan scenario.
+    ///
+    /// ```
+    /// let scan = idm::ScanScenario::from_fixture("hci0|AA:BB:CC|IDM-Clock|-43")?;
+    /// let _ = scan;
+    /// # Ok::<(), idm::FixtureError>(())
+    /// ```
+    pub fn from_fixture(raw_fixture: &str) -> Result<Self, FixtureError> {
+        Ok(Self {
+            fixture: raw_fixture.parse()?,
+            discovery_delay: Duration::ZERO,
+        })
+    }
+}
+
+impl TryFrom<&str> for ScanScenario {
+    type Error = FixtureError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        Self::from_fixture(value)
+    }
+}
+
+impl From<(ScanFixture, Duration)> for ScanScenario {
+    fn from((fixture, discovery_delay): (ScanFixture, Duration)) -> Self {
+        Self {
+            fixture,
+            discovery_delay,
+        }
+    }
+}
+
+/// One listen notification fixture item.
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum ListenNotification {
+    /// Encoded from a typed notification event.
+    Event(NotifyEvent),
+    /// Raw notification payload bytes.
+    Raw(Vec<u8>),
+}
+
+impl ListenNotification {
+    fn payload(self) -> Vec<u8> {
+        self.into()
+    }
+}
+
+impl From<ListenNotification> for Vec<u8> {
+    fn from(value: ListenNotification) -> Self {
+        match value {
+            ListenNotification::Event(event) => encode_notify_event(event),
+            ListenNotification::Raw(payload) => payload,
+        }
+    }
+}
+
+/// Fake listen-stream behaviour.
+#[derive(Debug, Clone, Builder, Default)]
+pub struct ListenScenario {
+    #[builder(default)]
+    notifications: Vec<ListenNotification>,
+    #[builder(default)]
+    stream_behaviour: ListenStreamBehaviour,
+    auto_advance_interval: Option<Duration>,
+}
+
+impl ListenScenario {
+    /// Parses comma-delimited notification payload fixtures.
+    ///
+    /// ```
+    /// let listen = idm::ListenScenario::from_payloads("0500010001,0500010003")?;
+    /// let _ = listen;
+    /// # Ok::<(), idm::FixtureError>(())
+    /// ```
+    pub fn from_payloads(raw_value: &str) -> Result<Self, FixtureError> {
+        raw_value.parse()
+    }
+}
+
+/// Behaviour of the fake listen stream once subscribed.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Default)]
+pub enum ListenStreamBehaviour {
+    /// Keep the notification stream open for dynamically emitted events.
+    #[default]
+    KeepOpen,
+    /// Close the stream after draining initial queued notifications.
+    CloseAfterInitialNotifications,
+}
+
+/// Named listen fixtures for fake-backend notification streams.
+#[derive(Debug, Clone, Copy, Eq, PartialEq, EnumString)]
+#[strum(serialize_all = "snake_case")]
+pub enum ListenFixture {
+    /// A GIF transfer that ACKs `next package`, then `finished`.
+    GifTransferHappyPath,
+    /// A text transfer that ACKs `next package`, then `finished`.
+    TextTransferHappyPath,
+}
+
+impl ListenFixture {
+    /// Constant-style alias for [`ListenFixture::GifTransferHappyPath`].
+    pub const GIF_TRANSFER_HAPPY_PATH: Self = Self::GifTransferHappyPath;
+    /// Constant-style alias for [`ListenFixture::TextTransferHappyPath`].
+    pub const TEXT_TRANSFER_HAPPY_PATH: Self = Self::TextTransferHappyPath;
+
+    fn into_scenario(self) -> ListenScenario {
+        let family = match self {
+            Self::GifTransferHappyPath => TransferFamily::Gif,
+            Self::TextTransferHappyPath => TransferFamily::Text,
+        };
+        ListenScenario {
+            notifications: vec![
+                ListenNotification::Event(NotifyEvent::NextPackage(family)),
+                ListenNotification::Event(NotifyEvent::Finished(family)),
+            ],
+            stream_behaviour: ListenStreamBehaviour::KeepOpen,
+            auto_advance_interval: None,
+        }
+    }
+}
+
+impl From<ListenFixture> for ListenScenario {
+    fn from(value: ListenFixture) -> Self {
+        value.into_scenario()
+    }
+}
+
+impl FromStr for ListenScenario {
+    type Err = FixtureError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        if let Ok(fixture) = value.parse::<ListenFixture>() {
+            return Ok(fixture.into());
+        }
+
+        let payloads = parse_notifications(value)?;
+        Ok(Self::from(payloads))
+    }
+}
+
+impl TryFrom<&str> for ListenScenario {
+    type Error = FixtureError;
+
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        value.parse()
+    }
+}
+
+impl From<Vec<Vec<u8>>> for ListenScenario {
+    fn from(payloads: Vec<Vec<u8>>) -> Self {
+        Self {
+            notifications: payloads.into_iter().map(ListenNotification::Raw).collect(),
+            stream_behaviour: ListenStreamBehaviour::KeepOpen,
+            auto_advance_interval: None,
+        }
+    }
+}
+
+/// Response action emitted by fake upload acknowledgement logic.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum AckAction {
+    /// Emit a normal `next package` acknowledgement.
+    NextPackage,
+    /// Emit a `finished` acknowledgement.
+    Finished,
+    /// Emit a family-specific error status.
+    Error(u8),
+    /// Emit nothing (simulates dropped acknowledgement).
+    NoAck,
+}
+
+impl AckAction {
+    fn into_event(self, family: TransferFamily) -> Option<NotifyEvent> {
+        match self {
+            Self::NextPackage => Some(NotifyEvent::NextPackage(family)),
+            Self::Finished => Some(NotifyEvent::Finished(family)),
+            Self::Error(status) => Some(NotifyEvent::Error(family, status)),
+            Self::NoAck => None,
+        }
+    }
+}
+
+/// Fake GIF acknowledgement behaviour.
+#[derive(Debug, Clone, Builder, Default)]
+pub struct GifScenario {
+    first_chunk: Option<AckAction>,
+    non_final_chunk: Option<AckAction>,
+    last_chunk: Option<AckAction>,
+}
+
+impl GifScenario {
+    fn action_for(&self, phase: ChunkPhase) -> AckAction {
+        match phase {
+            ChunkPhase::First => self.first_chunk,
+            ChunkPhase::Single => self.first_chunk.or(self.last_chunk),
+            ChunkPhase::NonFinal => self.non_final_chunk,
+            ChunkPhase::Last => self.last_chunk,
+        }
+        .unwrap_or(default_ack_action(phase))
+    }
+}
+
+/// Fake image acknowledgement behaviour.
+#[derive(Debug, Clone, Builder, Default)]
+pub struct ImageScenario {
+    first_chunk: Option<AckAction>,
+    non_final_chunk: Option<AckAction>,
+    last_chunk: Option<AckAction>,
+}
+
+impl ImageScenario {
+    fn action_for(&self, phase: ChunkPhase) -> AckAction {
+        match phase {
+            ChunkPhase::First => self.first_chunk,
+            ChunkPhase::Single => self.first_chunk.or(self.last_chunk),
+            ChunkPhase::NonFinal => self.non_final_chunk,
+            ChunkPhase::Last => self.last_chunk,
+        }
+        .unwrap_or(default_ack_action(phase))
+    }
+}
+
+/// Fake text acknowledgement behaviour.
+#[derive(Debug, Clone, Builder, Default)]
+pub struct TextScenario {
+    first_chunk: Option<AckAction>,
+    non_final_chunk: Option<AckAction>,
+    last_chunk: Option<AckAction>,
+}
+
+impl TextScenario {
+    fn action_for(&self, phase: ChunkPhase) -> AckAction {
+        match phase {
+            ChunkPhase::First => self.first_chunk,
+            ChunkPhase::Single => self.first_chunk.or(self.last_chunk),
+            ChunkPhase::NonFinal => self.non_final_chunk,
+            ChunkPhase::Last => self.last_chunk,
+        }
+        .unwrap_or(default_ack_action(phase))
+    }
+}
+
+fn default_ack_action(phase: ChunkPhase) -> AckAction {
+    match phase {
+        ChunkPhase::Single | ChunkPhase::Last => AckAction::Finished,
+        ChunkPhase::First | ChunkPhase::NonFinal => AckAction::NextPackage,
+    }
+}
+
 impl FromStr for NotificationPayloads {
     type Err = FixtureError;
 
@@ -72,16 +414,27 @@ impl FromStr for NotificationPayloads {
     }
 }
 
+impl From<NotificationPayloads> for ListenScenario {
+    fn from(value: NotificationPayloads) -> Self {
+        Self::from(Vec::<Vec<u8>>::from(value))
+    }
+}
+
 /// Settings for constructing a fake hardware backend.
 #[derive(Debug, Builder)]
 pub(crate) struct FakeBackendConfig {
-    scan_fixture: ScanFixture,
+    scan: ScanScenario,
     initial_read: Option<HexPayload>,
-    notifications: Option<NotificationPayloads>,
+    #[builder(default)]
+    listen: ListenScenario,
+    #[builder(default)]
+    gif: GifScenario,
+    #[builder(default)]
+    image: ImageScenario,
+    #[builder(default)]
+    text: TextScenario,
     #[builder(default)]
     model_resolution: ModelResolutionConfig,
-    #[builder(default)]
-    discovery_delay: Duration,
 }
 
 /// Fake backend used in tests and non-hardware environments.
@@ -90,8 +443,11 @@ pub(crate) struct FakeBackend {
     devices: Vec<FoundDevice>,
     services: Vec<ServiceInfo>,
     initial_read: Option<Vec<u8>>,
-    notifications: Vec<Vec<u8>>,
     discovery_delay: Duration,
+    listen: ListenScenario,
+    gif: GifScenario,
+    image: ImageScenario,
+    text: TextScenario,
     write_without_response_limit: Option<usize>,
     model_resolution: ModelResolutionConfig,
 }
@@ -99,20 +455,24 @@ pub(crate) struct FakeBackend {
 impl FakeBackend {
     /// Creates a fake backend from explicit settings.
     pub(crate) fn new(config: FakeBackendConfig) -> Self {
+        let ScanScenario {
+            fixture,
+            discovery_delay,
+        } = config.scan;
         let initial_read = config
             .initial_read
             .map(Into::into)
             .or_else(|| Some(DEFAULT_INITIAL_READ.to_vec()));
-        let notifications = config
-            .notifications
-            .map_or_else(|| DEFAULT_NOTIFICATIONS.map(Vec::from).to_vec(), Into::into);
 
         Self {
-            devices: config.scan_fixture.into(),
+            devices: fixture.into(),
             services: default_services(),
             initial_read,
-            notifications,
-            discovery_delay: config.discovery_delay,
+            discovery_delay,
+            listen: config.listen,
+            gif: config.gif,
+            image: config.image,
+            text: config.text,
             write_without_response_limit: DEFAULT_WRITE_WITHOUT_RESPONSE_LIMIT,
             model_resolution: config.model_resolution,
         }
@@ -128,8 +488,11 @@ impl FakeBackend {
             devices,
             services,
             initial_read,
-            notifications,
             discovery_delay,
+            listen,
+            gif,
+            image,
+            text,
             write_without_response_limit,
             model_resolution,
         } = self;
@@ -171,23 +534,117 @@ impl FakeBackend {
             endpoint_presence,
             session_metadata,
             initial_read,
-            notifications,
+            notification_tx: Mutex::new(None),
+            pending_notifications: Mutex::new(
+                listen
+                    .notifications
+                    .into_iter()
+                    .map(ListenNotification::payload)
+                    .collect(),
+            ),
+            listen_stream_behaviour: listen.stream_behaviour,
+            listen_auto_advance_interval: listen.auto_advance_interval,
+            protocol_state: Mutex::new(FakeProtocolState::new(gif, image, text)),
         })
     }
 }
 
 /// Active fake session.
-#[derive(Debug)]
 pub(crate) struct FakeDeviceSession {
     device: FoundDevice,
     services: Vec<ServiceInfo>,
     endpoint_presence: EndpointPresence,
     session_metadata: SessionMetadata,
     initial_read: Option<Vec<u8>>,
-    notifications: Vec<Vec<u8>>,
+    notification_tx: Mutex<Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>>,
+    pending_notifications: Mutex<VecDeque<Vec<u8>>>,
+    listen_stream_behaviour: ListenStreamBehaviour,
+    listen_auto_advance_interval: Option<Duration>,
+    protocol_state: Mutex<FakeProtocolState>,
 }
 
-#[async_trait(?Send)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum ChunkPhase {
+    First,
+    Single,
+    NonFinal,
+    Last,
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+struct ParsedTransferHeader {
+    family: TransferFamily,
+    phase: ChunkPhase,
+}
+
+#[derive(Debug, Default)]
+struct TransferProgress {
+    payload_len: u32,
+    sent_payload_len: u32,
+}
+
+impl TransferProgress {
+    fn observe(
+        &mut self,
+        chunk_flag: HeaderChunkFlag,
+        chunk_payload_len: u16,
+        payload_len: u32,
+    ) -> ChunkPhase {
+        if matches!(chunk_flag, HeaderChunkFlag::First) {
+            self.payload_len = payload_len;
+            self.sent_payload_len = 0;
+        }
+        self.sent_payload_len = self
+            .sent_payload_len
+            .saturating_add(u32::from(chunk_payload_len));
+
+        if matches!(chunk_flag, HeaderChunkFlag::First) {
+            if self.sent_payload_len >= self.payload_len {
+                ChunkPhase::Single
+            } else {
+                ChunkPhase::First
+            }
+        } else if self.sent_payload_len >= self.payload_len {
+            ChunkPhase::Last
+        } else {
+            ChunkPhase::NonFinal
+        }
+    }
+}
+
+#[derive(Debug)]
+struct FakeProtocolState {
+    gif: GifScenario,
+    image: ImageScenario,
+    text: TextScenario,
+    gif_progress: TransferProgress,
+    image_progress: TransferProgress,
+    text_progress: TransferProgress,
+}
+
+impl FakeProtocolState {
+    fn new(gif: GifScenario, image: ImageScenario, text: TextScenario) -> Self {
+        Self {
+            gif,
+            image,
+            text,
+            gif_progress: TransferProgress::default(),
+            image_progress: TransferProgress::default(),
+            text_progress: TransferProgress::default(),
+        }
+    }
+
+    fn action_for_header(&mut self, header: ParsedTransferHeader) -> AckAction {
+        match header.family {
+            TransferFamily::Gif => self.gif.action_for(header.phase),
+            TransferFamily::Image => self.image.action_for(header.phase),
+            TransferFamily::Text => self.text.action_for(header.phase),
+            _ => AckAction::NoAck,
+        }
+    }
+}
+
+#[async_trait]
 impl ConnectedBleSession for FakeDeviceSession {
     fn device(&self) -> &FoundDevice {
         &self.device
@@ -241,6 +698,17 @@ impl ConnectedBleSession for FakeDeviceSession {
             return Err(InteractionError::MissingEndpoint { endpoint });
         }
 
+        if let Some(header) = self.parse_transfer_header(payload) {
+            let action = {
+                let mut protocol_state =
+                    self.protocol_state.lock().expect("protocol mutex poisoned");
+                protocol_state.action_for_header(header)
+            };
+            if let Some(event) = action.into_event(header.family) {
+                self.emit_notification(encode_notify_event(event));
+            }
+        }
+
         Ok(())
     }
 
@@ -262,51 +730,137 @@ impl ConnectedBleSession for FakeDeviceSession {
         Ok(())
     }
 
-    #[instrument(
-        skip(self, on_notification),
-        level = "trace",
-        fields(?endpoint, ?max_notifications)
-    )]
-    async fn run_notifications(
+    async fn notification_payloads(
         &self,
         endpoint: EndpointId,
-        max_notifications: Option<usize>,
-        on_notification: &mut dyn FnMut(usize, Vec<u8>),
-    ) -> Result<NotificationRunSummary, InteractionError> {
+    ) -> Result<PayloadStream, InteractionError> {
         if endpoint != EndpointId::ReadNotifyCharacteristic {
             return Err(InteractionError::MissingEndpoint { endpoint });
         }
 
-        if let Some(limit) = max_notifications
-            && limit == 0
+        let (sender, rx) = tokio::sync::mpsc::unbounded_channel();
+        if let Some(interval) = self
+            .listen_auto_advance_interval
+            .filter(|value| !value.is_zero())
         {
-            return Ok(NotificationRunSummary::new(
-                0,
-                ListenStopReason::ReachedLimit(0),
-            ));
+            let sender_for_clock = sender.clone();
+            tokio::spawn(async move {
+                while !sender_for_clock.is_closed() {
+                    tokio::time::advance(interval).await;
+                    tokio::task::yield_now().await;
+                }
+            });
         }
-
-        let mut received = 0usize;
-        let mut stop_reason = ListenStopReason::NotificationStreamClosed;
-        for payload in &self.notifications {
-            received += 1;
-            on_notification(received, payload.clone());
-
-            if let Some(limit) = max_notifications
-                && received >= limit
-            {
-                stop_reason = ListenStopReason::ReachedLimit(limit);
-                break;
+        match self.listen_stream_behaviour {
+            ListenStreamBehaviour::KeepOpen => {
+                {
+                    let mut tx_guard = self
+                        .notification_tx
+                        .lock()
+                        .expect("notification sender mutex poisoned");
+                    *tx_guard = Some(sender.clone());
+                }
+                {
+                    let mut pending = self
+                        .pending_notifications
+                        .lock()
+                        .expect("pending notification mutex poisoned");
+                    while let Some(payload) = pending.pop_front() {
+                        let _ = sender.send(payload);
+                    }
+                }
+            }
+            ListenStreamBehaviour::CloseAfterInitialNotifications => {
+                {
+                    let mut tx_guard = self
+                        .notification_tx
+                        .lock()
+                        .expect("notification sender mutex poisoned");
+                    *tx_guard = None;
+                }
+                {
+                    let mut pending = self
+                        .pending_notifications
+                        .lock()
+                        .expect("pending notification mutex poisoned");
+                    while let Some(payload) = pending.pop_front() {
+                        let _ = sender.send(payload);
+                    }
+                }
             }
         }
 
-        Ok(NotificationRunSummary::new(received, stop_reason))
+        Ok(Box::pin(
+            tokio_stream::wrappers::UnboundedReceiverStream::new(rx),
+        ))
     }
 
     #[instrument(skip(self), level = "debug")]
-    async fn close(self: Box<Self>) -> Result<(), InteractionError> {
+    async fn close(self: Arc<Self>) -> Result<(), InteractionError> {
         let _ = self;
         Ok(())
+    }
+}
+
+impl FakeDeviceSession {
+    fn emit_notification(&self, payload: Vec<u8>) {
+        if let Some(sender) = self
+            .notification_tx
+            .lock()
+            .expect("notification sender mutex poisoned")
+            .as_ref()
+            .cloned()
+        {
+            let _ = sender.send(payload);
+            return;
+        }
+
+        self.pending_notifications
+            .lock()
+            .expect("pending notification mutex poisoned")
+            .push_back(payload);
+    }
+
+    fn parse_transfer_header(&self, payload: &[u8]) -> Option<ParsedTransferHeader> {
+        if payload.len() < 16 {
+            return None;
+        }
+
+        let declared_len = u16::from_le_bytes([payload[0], payload[1]]) as usize;
+        if declared_len < 16 {
+            return None;
+        }
+
+        let command = UploadCommand::try_from((payload[2], payload[3])).ok()?;
+        let family = TransferFamily::from(command);
+
+        let chunk_flag = HeaderChunkFlag::try_from(payload[4]).ok()?;
+        let chunk_payload_len = u16::try_from(declared_len - 16).ok()?;
+        let payload_len = u32::from_le_bytes([payload[5], payload[6], payload[7], payload[8]]);
+
+        let phase = match family {
+            TransferFamily::Gif => self
+                .protocol_state
+                .lock()
+                .expect("protocol mutex poisoned")
+                .gif_progress
+                .observe(chunk_flag, chunk_payload_len, payload_len),
+            TransferFamily::Image => self
+                .protocol_state
+                .lock()
+                .expect("protocol mutex poisoned")
+                .image_progress
+                .observe(chunk_flag, chunk_payload_len, payload_len),
+            TransferFamily::Text => self
+                .protocol_state
+                .lock()
+                .expect("protocol mutex poisoned")
+                .text_progress
+                .observe(chunk_flag, chunk_payload_len, payload_len),
+            _ => return None,
+        };
+
+        Some(ParsedTransferHeader { family, phase })
     }
 }
 
@@ -439,6 +993,167 @@ fn parse_notifications(raw_value: &str) -> Result<Vec<Vec<u8>>, FixtureError> {
         return Ok(Vec::new());
     }
     raw_value.split(',').map(parse_hex).collect()
+}
+
+fn encode_notify_event(event: NotifyEvent) -> Vec<u8> {
+    let frame = match event {
+        NotifyEvent::NextPackage(TransferFamily::Text) => Some(NotificationFrame {
+            code: NotificationCode {
+                id: TEXT_COMMAND_ID,
+                ns: COMMAND_NS,
+            },
+            status: STATUS_NEXT_PACKAGE,
+        }),
+        NotifyEvent::Finished(TransferFamily::Text) => Some(NotificationFrame {
+            code: NotificationCode {
+                id: TEXT_COMMAND_ID,
+                ns: COMMAND_NS,
+            },
+            status: STATUS_FINISHED,
+        }),
+        NotifyEvent::Error(TransferFamily::Text, status) => Some(NotificationFrame {
+            code: NotificationCode {
+                id: TEXT_COMMAND_ID,
+                ns: COMMAND_NS,
+            },
+            status,
+        }),
+        NotifyEvent::NextPackage(TransferFamily::Gif) => Some(NotificationFrame {
+            code: NotificationCode {
+                id: GIF_COMMAND_ID,
+                ns: COMMAND_NS,
+            },
+            status: STATUS_NEXT_PACKAGE,
+        }),
+        NotifyEvent::Finished(TransferFamily::Gif) => Some(NotificationFrame {
+            code: NotificationCode {
+                id: GIF_COMMAND_ID,
+                ns: COMMAND_NS,
+            },
+            status: STATUS_FINISHED,
+        }),
+        NotifyEvent::Error(TransferFamily::Gif, status) => Some(NotificationFrame {
+            code: NotificationCode {
+                id: GIF_COMMAND_ID,
+                ns: COMMAND_NS,
+            },
+            status,
+        }),
+        NotifyEvent::NextPackage(TransferFamily::Image) => Some(NotificationFrame {
+            code: NotificationCode {
+                id: IMAGE_COMMAND_ID,
+                ns: COMMAND_NS,
+            },
+            status: STATUS_NEXT_PACKAGE,
+        }),
+        NotifyEvent::Finished(TransferFamily::Image) => Some(NotificationFrame {
+            code: NotificationCode {
+                id: IMAGE_COMMAND_ID,
+                ns: COMMAND_NS,
+            },
+            status: STATUS_FINISHED,
+        }),
+        NotifyEvent::Error(TransferFamily::Image, status) => Some(NotificationFrame {
+            code: NotificationCode {
+                id: IMAGE_COMMAND_ID,
+                ns: COMMAND_NS,
+            },
+            status,
+        }),
+        NotifyEvent::NextPackage(TransferFamily::Diy) => Some(NotificationFrame {
+            code: NotificationCode { id: 0x00, ns: 0x00 },
+            status: 0x02,
+        }),
+        NotifyEvent::Finished(TransferFamily::Diy) => Some(NotificationFrame {
+            code: NotificationCode { id: 0x00, ns: 0x00 },
+            status: 0x00,
+        }),
+        NotifyEvent::Error(TransferFamily::Diy, status) => Some(NotificationFrame {
+            code: NotificationCode { id: 0x00, ns: 0x00 },
+            status,
+        }),
+        NotifyEvent::NextPackage(TransferFamily::Timer) => Some(NotificationFrame {
+            code: NotificationCode { id: 0x00, ns: 0x80 },
+            status: STATUS_NEXT_PACKAGE,
+        }),
+        NotifyEvent::Finished(TransferFamily::Timer) => Some(NotificationFrame {
+            code: NotificationCode { id: 0x00, ns: 0x80 },
+            status: STATUS_FINISHED,
+        }),
+        NotifyEvent::Error(TransferFamily::Timer, status) => Some(NotificationFrame {
+            code: NotificationCode { id: 0x00, ns: 0x80 },
+            status,
+        }),
+        NotifyEvent::NextPackage(TransferFamily::Ota) => Some(NotificationFrame {
+            code: NotificationCode { id: 0x01, ns: 0xC0 },
+            status: STATUS_NEXT_PACKAGE,
+        }),
+        NotifyEvent::Finished(TransferFamily::Ota) => Some(NotificationFrame {
+            code: NotificationCode { id: 0x01, ns: 0xC0 },
+            status: STATUS_FINISHED,
+        }),
+        NotifyEvent::Error(TransferFamily::Ota, status) => Some(NotificationFrame {
+            code: NotificationCode { id: 0x01, ns: 0xC0 },
+            status,
+        }),
+        NotifyEvent::ScheduleSetup(status) => {
+            let value = match status {
+                crate::ScheduleSetupStatus::Success => 0x01,
+                crate::ScheduleSetupStatus::Continue => 0x03,
+                crate::ScheduleSetupStatus::Failed(other) => other,
+            };
+            return NotificationFrame {
+                code: NotificationCode {
+                    id: SCHEDULE_SETUP_ID,
+                    ns: SCHEDULE_NS,
+                },
+                status: value,
+            }
+            .into_payload();
+        }
+        NotifyEvent::ScheduleMasterSwitch(status) => {
+            let value = match status {
+                crate::ScheduleMasterSwitchStatus::Success => 0x01,
+                crate::ScheduleMasterSwitchStatus::Failed(other) => other,
+            };
+            return NotificationFrame {
+                code: NotificationCode {
+                    id: SCHEDULE_MASTER_SWITCH_ID,
+                    ns: SCHEDULE_NS,
+                },
+                status: value,
+            }
+            .into_payload();
+        }
+        NotifyEvent::LedInfo(response) => {
+            return vec![
+                0x09,
+                0x00,
+                0x01,
+                0x80,
+                response.mcu_major_version,
+                response.mcu_minor_version,
+                response.status,
+                response.screen_type,
+                u8::from(response.password_enabled),
+            ];
+        }
+        NotifyEvent::ScreenLightTimeout(value) => {
+            return NotificationFrame {
+                code: NotificationCode {
+                    id: SCREEN_LIGHT_TIMEOUT_ID,
+                    ns: SCHEDULE_NS,
+                },
+                status: value,
+            }
+            .into_payload();
+        }
+        NotifyEvent::Unknown(payload) => return payload,
+    };
+
+    frame
+        .expect("all transfer notifications map to frames")
+        .into_payload()
 }
 
 fn parse_hex(raw_value: &str) -> Result<Vec<u8>, FixtureError> {
