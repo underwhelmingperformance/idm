@@ -1,0 +1,5 @@
+---
+source: tests/commands_cli.rs
+expression: stdout.trim_end()
+---
+Synced time (UTC unix): 1700000000

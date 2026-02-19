@@ -24,16 +24,30 @@ pub fn derive_has_diagnostics(input: TokenStream) -> TokenStream {
 
 /// Wraps a function with an indicatif progress bar tied to its tracing span.
 ///
-/// Place this above `#[instrument]` to automatically inject `progress = true`
-/// into the span's fields and set both the in-progress and finished messages.
-/// If no `#[instrument]` attribute is present, one is added automatically.
+/// `message` and `finished` configure progress-bar text. Any additional
+/// arguments are forwarded to `#[instrument(...)]`, and `progress = true` is
+/// injected into instrument fields automatically. If no `#[instrument]`
+/// attribute is present, one is added automatically.
+///
+/// `finished` is evaluated when the function body completes. During evaluation,
+/// `result` is available as a reference to the function return value.
+///
+/// Inside the attributed function body, this macro also injects helper
+/// macros for chunked-transfer progress:
+/// - `progress_set_length!(<usize>)`
+/// - `progress_inc_length!(<usize>)`
+/// - `progress_inc!()` or `progress_inc!(<usize>)`
+/// - `progress_trace!(<completed>, <total>)`
+///
+/// Progress-bar length is initialised to `0` when the function starts.
 ///
 /// ```ignore
 /// #[progress(
 ///     message = "Scanning for devices",
 ///     finished = format!("{} Connected", "✓".green()),
+///     skip(self),
+///     level = "info",
 /// )]
-/// #[instrument(skip(self), level = "info")]
 /// async fn connect(&self) -> Result<()> { /* ... */ }
 /// ```
 #[proc_macro_attribute]

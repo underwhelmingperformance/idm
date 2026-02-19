@@ -125,7 +125,7 @@ async fn control_power_command_applies_state() -> anyhow::Result<()> {
     ])
     .await?;
 
-    assert_eq!("Applied power state: on", stdout.trim_end());
+    assert_snapshot!("control_power_command_stdout", stdout.trim_end());
     Ok(())
 }
 
@@ -142,7 +142,7 @@ async fn control_brightness_command_applies_value() -> anyhow::Result<()> {
     ])
     .await?;
 
-    assert_eq!("Applied brightness: 80", stdout.trim_end());
+    assert_snapshot!("control_brightness_command_stdout", stdout.trim_end());
     Ok(())
 }
 
@@ -161,7 +161,7 @@ async fn control_colour_command_applies_rgb_value() -> anyhow::Result<()> {
     ])
     .await?;
 
-    assert_eq!("Applied fullscreen colour: #112233", stdout.trim_end());
+    assert_snapshot!("control_colour_command_stdout", stdout.trim_end());
     Ok(())
 }
 
@@ -179,7 +179,7 @@ async fn control_sync_time_command_uses_explicit_unix_timestamp() -> anyhow::Res
     ])
     .await?;
 
-    assert_eq!("Synced time (UTC unix): 1700000000", stdout.trim_end());
+    assert_snapshot!("control_sync_time_command_stdout", stdout.trim_end());
     Ok(())
 }
 
@@ -196,10 +196,7 @@ async fn control_text_command_uploads_payload() -> anyhow::Result<()> {
     ])
     .await?;
 
-    assert_eq!(
-        "Uploaded text payload: 70 bytes in 1 chunk(s)",
-        stdout.trim_end()
-    );
+    assert_snapshot!("control_text_command_stdout", stdout.trim_end());
     Ok(())
 }
 
@@ -236,10 +233,7 @@ async fn image_command_uploads_gif_payload() -> anyhow::Result<()> {
     ])
     .await?;
 
-    assert_eq!(
-        "Uploaded GIF payload: 96 bytes in 1 chunk(s) across 1 logical chunk(s)",
-        stdout.trim_end()
-    );
+    assert_snapshot!("image_command_uploads_gif_stdout", stdout.trim_end());
 
     std::fs::remove_file(file_path)?;
     Ok(())
@@ -279,8 +273,8 @@ async fn image_command_uploads_transformed_payload() -> anyhow::Result<()> {
     ])
     .await?;
 
-    assert_eq!(
-        "Uploaded image payload: 784 bytes in 2 chunk(s) across 1 logical chunk(s)",
+    assert_snapshot!(
+        "image_command_uploads_transformed_stdout",
         stdout.trim_end()
     );
 

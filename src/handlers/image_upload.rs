@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use crc32fast::hash;
+use idm_macros::progress;
 use thiserror::Error;
 use tokio::time::{sleep, timeout};
 use tracing::instrument;
@@ -296,7 +297,20 @@ impl ImageUploadHandler {
     ///
     /// Returns an error when payload validation, frame encoding, BLE writes, or
     /// acknowledgement handling fails.
-    #[instrument(skip_all, level = "debug")]
+    #[progress(
+        message = "Uploading image payload",
+        finished = match result {
+            Ok(receipt) => format!(
+                "✓ Uploaded image payload: {} bytes in {} chunk(s) across {} logical chunk(s)",
+                receipt.bytes_written(),
+                receipt.chunks_written(),
+                receipt.logical_chunks_sent(),
+            ),
+            Err(_error) => "✗ Image upload failed".to_string(),
+        },
+        skip_all,
+        level = "info"
+    )]
     pub async fn upload(
         session: &DeviceSession,
         request: ImageUploadRequest,
@@ -334,6 +348,7 @@ impl ImageUploadHandler {
             let mut bytes_written = 0usize;
             let mut chunks_written = 0usize;
             let mut logical_chunks_sent = 0usize;
+            let mut transport_chunks_total = 0usize;
 
             for (index, logical_chunk) in payload.chunks(LOGICAL_CHUNK_SIZE).enumerate() {
                 let chunk_flag = if index == 0 {
@@ -360,6 +375,9 @@ impl ImageUploadHandler {
                 frame_block.extend_from_slice(&header);
                 frame_block.extend_from_slice(logical_chunk);
                 logical_chunks_sent += 1;
+                let block_transport_chunks = frame_block.len().div_ceil(chunk_size);
+                transport_chunks_total += block_transport_chunks;
+                progress_inc_length!(block_transport_chunks);
 
                 for transport_chunk in frame_block.chunks(chunk_size) {
                     session
@@ -371,6 +389,8 @@ impl ImageUploadHandler {
                         .await?;
                     bytes_written += transport_chunk.len();
                     chunks_written += 1;
+                    progress_inc!();
+                    progress_trace!(chunks_written, transport_chunks_total);
                     apply_fragment_delay(request.per_fragment_delay).await;
                 }
 

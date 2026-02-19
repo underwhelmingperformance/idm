@@ -119,15 +119,7 @@ where
                 ImageUploadHandler::upload(session, ImageUploadRequest::new(still.into_frame()))
                     .await?;
             match output_format {
-                OutputFormat::Pretty => {
-                    writeln!(
-                        out,
-                        "Uploaded image payload: {} bytes in {} chunk(s) across {} logical chunk(s)",
-                        receipt.bytes_written(),
-                        receipt.chunks_written(),
-                        receipt.logical_chunks_sent(),
-                    )?;
-                }
+                OutputFormat::Pretty => {}
                 OutputFormat::Json => {
                     write_json_line(
                         out,
@@ -144,24 +136,7 @@ where
         PreparedImageUpload::Gif(gif) => {
             let receipt = GifUploadHandler::upload(session, GifUploadRequest::new(gif)).await?;
             match output_format {
-                OutputFormat::Pretty => {
-                    if receipt.cached() {
-                        writeln!(
-                            out,
-                            "Uploaded GIF payload: {} bytes in {} chunk(s); device cache hit",
-                            receipt.bytes_written(),
-                            receipt.chunks_written(),
-                        )?;
-                    } else {
-                        writeln!(
-                            out,
-                            "Uploaded GIF payload: {} bytes in {} chunk(s) across {} logical chunk(s)",
-                            receipt.bytes_written(),
-                            receipt.chunks_written(),
-                            receipt.logical_chunks_sent(),
-                        )?;
-                    }
-                }
+                OutputFormat::Pretty => {}
                 OutputFormat::Json => {
                     write_json_line(
                         out,

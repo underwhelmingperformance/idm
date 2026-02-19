@@ -4,7 +4,6 @@ use anyhow::Result;
 use idm_macros::progress;
 use owo_colors::OwoColorize;
 use tracing::instrument;
-use tracing_indicatif::span_ext::IndicatifSpanExt;
 
 use crate::cli::{Command, FakeArgs, LogLevel, OutputFormat};
 use crate::hw::{
@@ -85,23 +84,21 @@ impl SessionHandler {
     /// Returns an error if discovery or connection fails.
     #[progress(
         message = "Scanning for iDotMatrix devices and connecting",
-        finished = format!("{} Connected", "✓".green()),
+        finished = match result {
+            Ok(_session) => format!("{} Connected", "✓".green()),
+            Err(_error) => format!("{} Connection failed", "✗".red()),
+        },
+        skip(self),
+        level = "info",
+        fields(name_prefix = %self.name_prefix),
     )]
-    #[instrument(skip(self), level = "info", fields(name_prefix = %self.name_prefix))]
     pub async fn connect_first(self) -> Result<DeviceSession> {
         let name_prefix = self.name_prefix;
         let hardware_client = self.hardware_client;
-        match hardware_client
+        hardware_client
             .connect_first_device(name_prefix.as_str())
             .await
-        {
-            Ok(session) => Ok(session),
-            Err(error) => {
-                let finish_message = format!("{} Connection failed", "✗".red());
-                tracing::Span::current().pb_set_finish_message(&finish_message);
-                Err(error.into())
-            }
-        }
+            .map_err(Into::into)
     }
 }
 

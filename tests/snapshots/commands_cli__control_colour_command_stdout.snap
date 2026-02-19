@@ -1,0 +1,5 @@
+---
+source: tests/commands_cli.rs
+expression: stdout.trim_end()
+---
+Applied fullscreen colour: #112233

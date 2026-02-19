@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use crc32fast::hash;
 use font8x8::UnicodeFonts;
+use idm_macros::progress;
 use thiserror::Error;
 use tokio::time::timeout;
 use tracing::instrument;
@@ -258,7 +259,12 @@ impl TextUploadHandler {
     /// # Errors
     ///
     /// Returns an error when payload construction, BLE writes, or pacing fails.
-    #[instrument(skip_all, level = "debug")]
+    #[progress(
+        message = "Uploading text payload",
+        finished = "Text upload complete",
+        skip_all,
+        level = "info"
+    )]
     pub async fn upload(
         session: &DeviceSession,
         request: TextUploadRequest,
@@ -282,7 +288,13 @@ impl TextUploadHandler {
         }
 
         let upload_result = async {
+            let mut transport_chunks_total = 0usize;
+
             for block in &frame_blocks {
+                let block_transport_chunks = block.len().div_ceil(chunk_size);
+                transport_chunks_total += block_transport_chunks;
+                progress_inc_length!(block_transport_chunks);
+
                 for transport_chunk in block.chunks(chunk_size) {
                     session
                         .write_endpoint(
@@ -293,6 +305,8 @@ impl TextUploadHandler {
                         .await?;
                     bytes_written += transport_chunk.len();
                     chunks_written += 1;
+                    progress_inc!();
+                    progress_trace!(chunks_written, transport_chunks_total);
                     apply_transport_pacing(request.pacing).await?;
                 }
                 apply_block_pacing(session, request.pacing).await?;

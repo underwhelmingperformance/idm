@@ -1,0 +1,5 @@
+---
+source: tests/commands_cli.rs
+expression: stdout.trim_end()
+---
+Uploaded text payload: 70 bytes in 1 chunk(s)
