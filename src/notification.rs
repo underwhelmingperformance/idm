@@ -1,30 +1,88 @@
-use derive_more::Display;
+use std::fmt::{self, Display, Formatter};
+
+use strum_macros::Display as StrumDisplay;
 use thiserror::Error;
 use tracing::instrument;
 
 use crate::hw::LedInfoResponse;
 
 /// Transfer families used by notification flow-control responses.
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Display)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, StrumDisplay)]
+#[strum(serialize_all = "title_case")]
 pub enum TransferFamily {
     /// Text upload transfer family.
-    #[display("text")]
     Text,
     /// GIF upload transfer family.
-    #[display("gif")]
+    #[strum(to_string = "GIF")]
     Gif,
     /// Image upload transfer family.
-    #[display("image")]
     Image,
     /// DIY upload transfer family.
-    #[display("diy")]
+    #[strum(to_string = "DIY")]
     Diy,
     /// Timer transfer family.
-    #[display("timer")]
     Timer,
     /// OTA transfer family.
-    #[display("ota")]
+    #[strum(to_string = "OTA")]
     Ota,
+}
+
+/// Decoded status for the schedule setup response.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ScheduleSetupStatus {
+    /// The device accepted setup and is ready for the next phase.
+    Success,
+    /// The device requested the next queued schedule resource.
+    Continue,
+    /// The device rejected setup with a status byte.
+    Failed(u8),
+}
+
+impl From<u8> for ScheduleSetupStatus {
+    fn from(value: u8) -> Self {
+        match value {
+            0x01 => Self::Success,
+            0x03 => Self::Continue,
+            other => Self::Failed(other),
+        }
+    }
+}
+
+impl Display for ScheduleSetupStatus {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Success => f.write_str("success"),
+            Self::Continue => f.write_str("continue"),
+            Self::Failed(status) => write!(f, "failed ({status:#04X})"),
+        }
+    }
+}
+
+/// Decoded status for the schedule master-switch response.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum ScheduleMasterSwitchStatus {
+    /// The device accepted the master-switch command.
+    Success,
+    /// The device rejected the master-switch command with a status byte.
+    Failed(u8),
+}
+
+impl From<u8> for ScheduleMasterSwitchStatus {
+    fn from(value: u8) -> Self {
+        match value {
+            0x01 => Self::Success,
+            other => Self::Failed(other),
+        }
+    }
+}
+
+impl Display for ScheduleMasterSwitchStatus {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Success => f.write_str("success"),
+            Self::Failed(status) => write!(f, "failed ({status:#04X})"),
+        }
+    }
 }
 
 /// Typed notification events emitted by iDotMatrix devices.
@@ -36,16 +94,45 @@ pub enum NotifyEvent {
     Finished(TransferFamily),
     /// Family-specific error status.
     Error(TransferFamily, u8),
-    /// Schedule setup response byte.
-    ScheduleSetup(u8),
-    /// Schedule master-switch response byte.
-    ScheduleMasterSwitch(u8),
+    /// Schedule setup response status.
+    ScheduleSetup(ScheduleSetupStatus),
+    /// Schedule master-switch response status.
+    ScheduleMasterSwitch(ScheduleMasterSwitchStatus),
     /// Parsed `Get LED type` response.
     LedInfo(LedInfoResponse),
     /// Parsed screen-light readback timeout value.
     ScreenLightTimeout(u8),
     /// Unrecognised notification payload preserved as raw bytes.
     Unknown(Vec<u8>),
+}
+
+impl Display for NotifyEvent {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NextPackage(family) => write!(f, "{family} next package"),
+            Self::Finished(family) => write!(f, "{family} finished"),
+            Self::Error(family, status) => write!(f, "{family} error ({status:#04X})"),
+            Self::ScheduleSetup(status) => write!(f, "Schedule setup: {status}"),
+            Self::ScheduleMasterSwitch(status) => {
+                write!(f, "Schedule master switch: {status}")
+            }
+            Self::LedInfo(response) => write!(
+                f,
+                "LED info: screen_type={} mcu={}.{} status={:#04X} password={}",
+                response.screen_type,
+                response.mcu_major_version,
+                response.mcu_minor_version,
+                response.status,
+                if response.password_enabled {
+                    "on"
+                } else {
+                    "off"
+                }
+            ),
+            Self::ScreenLightTimeout(value) => write!(f, "Screen-light timeout: {value}"),
+            Self::Unknown(_unknown_payload) => f.write_str("Unknown event"),
+        }
+    }
 }
 
 /// Errors returned while decoding notification payloads.
@@ -79,10 +166,10 @@ impl NotificationHandler {
                 return Ok(NotifyEvent::ScreenLightTimeout(payload[4]));
             }
             if payload[2] == 0x05 && payload[3] == 0x80 {
-                return Ok(NotifyEvent::ScheduleSetup(payload[4]));
+                return Ok(NotifyEvent::ScheduleSetup(payload[4].into()));
             }
             if payload[2] == 0x07 && payload[3] == 0x80 {
-                return Ok(NotifyEvent::ScheduleMasterSwitch(payload[4]));
+                return Ok(NotifyEvent::ScheduleMasterSwitch(payload[4].into()));
             }
         }
 
@@ -171,10 +258,13 @@ mod tests {
     }
 
     #[rstest]
-    #[case([0x05, 0x00, 0x05, 0x80, 0x01], NotifyEvent::ScheduleSetup(0x01))]
+    #[case(
+        [0x05, 0x00, 0x05, 0x80, 0x01],
+        NotifyEvent::ScheduleSetup(ScheduleSetupStatus::Success)
+    )]
     #[case(
         [0x05, 0x00, 0x07, 0x80, 0x03],
-        NotifyEvent::ScheduleMasterSwitch(0x03)
+        NotifyEvent::ScheduleMasterSwitch(ScheduleMasterSwitchStatus::Failed(0x03))
     )]
     #[case(
         [0x05, 0x00, 0x0F, 0x80, 0x1E],

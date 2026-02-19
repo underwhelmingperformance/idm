@@ -10,9 +10,7 @@ use tracing::instrument;
 use crate::error::ProtocolError;
 use crate::hw::{DeviceSession, TextPath, WriteMode};
 use crate::protocol::EndpointId;
-use crate::{
-    FrameCodec, NotificationDecodeError, NotificationHandler, NotifyEvent, Rgb, TransferFamily,
-};
+use crate::{FrameCodec, NotificationDecodeError, NotifyEvent, Rgb, TransferFamily};
 
 use super::FrameCodecError;
 
@@ -396,8 +394,8 @@ async fn wait_for_notify_ack(
         session.run_notifications(
             EndpointId::ReadNotifyCharacteristic,
             Some(1),
-            |_index, payload| {
-                decoded_event = Some(NotificationHandler::decode(payload));
+            |_index, event| {
+                decoded_event = Some(event);
             },
         ),
     )

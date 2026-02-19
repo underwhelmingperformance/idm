@@ -7,9 +7,10 @@ use tracing::instrument;
 
 use crate::cli::OutputFormat;
 use crate::hw::{HardwareClient, ListenSummary};
+use crate::notification::NotificationDecodeError;
 use crate::protocol::EndpointId;
 use crate::terminal::TerminalClient;
-use crate::{FoundDevice, NotificationHandler, NotifyEvent, TransferFamily};
+use crate::{FoundDevice, NotifyEvent};
 
 use super::ui::{ListenNotificationView, ListenReadyView, ListenSummaryView, Painter};
 
@@ -23,7 +24,6 @@ enum ListenEvent<'a> {
     },
     Notification {
         index: usize,
-        payload: String,
         event_label: Option<String>,
     },
     Summary {
@@ -135,24 +135,20 @@ where
     let mut write_error: Option<io::Error> = None;
 
     let run_result = session
-        .run_notifications(endpoint, max_notifications, |index, payload| {
+        .run_notifications(endpoint, max_notifications, |index, event| {
             if write_error.is_some() {
                 return;
             }
-            let event_label = decode_event_label(payload);
+            let event_label = decode_event_label(event);
             let result = match output_format {
                 OutputFormat::Pretty => {
                     let painter = Painter::new(terminal_client.stdout_is_terminal());
-                    let view = ListenNotificationView::new(index, payload, event_label, &painter);
+                    let view = ListenNotificationView::new(index, event_label, &painter);
                     writeln!(out, "{view}")
                 }
                 OutputFormat::Json => serde_json::to_writer_pretty(
                     &mut *out,
-                    &ListenEvent::Notification {
-                        index,
-                        payload: hex::encode(payload),
-                        event_label,
-                    },
+                    &ListenEvent::Notification { index, event_label },
                 )
                 .map_err(io::Error::other)
                 .and_then(|()| writeln!(out)),
@@ -194,61 +190,9 @@ where
     Ok(())
 }
 
-fn decode_event_label(payload: &[u8]) -> Option<String> {
-    match NotificationHandler::decode(payload) {
-        Ok(NotifyEvent::NextPackage(family)) => {
-            Some(format!("{} next package", family_label(family)))
-        }
-        Ok(NotifyEvent::Finished(family)) => Some(format!("{} finished", family_label(family))),
-        Ok(NotifyEvent::Error(family, status)) => {
-            Some(format!("{} error ({status:#04X})", family_label(family)))
-        }
-        Ok(NotifyEvent::ScheduleSetup(status)) => Some(schedule_setup_message(status)),
-        Ok(NotifyEvent::ScheduleMasterSwitch(status)) => {
-            Some(schedule_master_switch_message(status))
-        }
-        Ok(NotifyEvent::LedInfo(response)) => Some(format!(
-            "LED info: screen_type={} mcu={}.{} status={:#04X} password={}",
-            response.screen_type,
-            response.mcu_major_version,
-            response.mcu_minor_version,
-            response.status,
-            if response.password_enabled {
-                "on"
-            } else {
-                "off"
-            }
-        )),
-        Ok(NotifyEvent::ScreenLightTimeout(value)) => {
-            Some(format!("Screen-light timeout: {value}"))
-        }
-        Ok(NotifyEvent::Unknown(_unknown_payload)) => Some("Unknown event".to_string()),
+fn decode_event_label(event: Result<NotifyEvent, NotificationDecodeError>) -> Option<String> {
+    match event {
+        Ok(event) => Some(event.to_string()),
         Err(error) => Some(format!("Decode error: {error}")),
-    }
-}
-
-fn family_label(family: TransferFamily) -> &'static str {
-    match family {
-        TransferFamily::Text => "Text",
-        TransferFamily::Gif => "GIF",
-        TransferFamily::Image => "Image",
-        TransferFamily::Diy => "DIY",
-        TransferFamily::Timer => "Timer",
-        TransferFamily::Ota => "OTA",
-    }
-}
-
-fn schedule_setup_message(status: u8) -> String {
-    match status {
-        0x01 => "Schedule setup: success".to_string(),
-        0x03 => "Schedule setup: continue".to_string(),
-        other => format!("Schedule setup: failed ({other:#04X})"),
-    }
-}
-
-fn schedule_master_switch_message(status: u8) -> String {
-    match status {
-        0x01 => "Schedule master switch: success".to_string(),
-        other => format!("Schedule master switch: failed ({other:#04X})"),
     }
 }

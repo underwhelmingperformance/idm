@@ -92,8 +92,8 @@ async fn fake_session_run_notifications_respects_limit() -> anyhow::Result<()> {
         .run_notifications(
             idm::EndpointId::ReadNotifyCharacteristic,
             Some(2),
-            |index, payload| {
-                received.push((index, payload.to_vec()));
+            |index, event| {
+                received.push((index, event));
             },
         )
         .await?;
@@ -105,8 +105,11 @@ async fn fake_session_run_notifications_respects_limit() -> anyhow::Result<()> {
     );
     assert_eq!(
         vec![
-            (1, vec![0x05, 0x00, 0x01, 0x00, 0x01]),
-            (2, vec![0x05, 0x00, 0x01, 0x00, 0x03]),
+            (
+                1,
+                Ok(idm::NotifyEvent::NextPackage(idm::TransferFamily::Gif))
+            ),
+            (2, Ok(idm::NotifyEvent::Finished(idm::TransferFamily::Gif))),
         ],
         received
     );
@@ -132,8 +135,8 @@ async fn fake_session_run_listen_returns_summary() -> anyhow::Result<()> {
     let mut received = Vec::new();
 
     let summary = session
-        .run_listen(Some(1), |index, payload| {
-            received.push((index, payload.to_vec()));
+        .run_listen(Some(1), |index, event| {
+            received.push((index, event));
         })
         .await?;
 
@@ -143,7 +146,10 @@ async fn fake_session_run_listen_returns_summary() -> anyhow::Result<()> {
         summary.stop_reason(),
         &idm::ListenStopReason::ReachedLimit(1)
     );
-    assert_eq!(vec![(1, vec![0xAA, 0x55])], received);
+    assert_eq!(
+        vec![(1, Ok(idm::NotifyEvent::Unknown(vec![0xAA, 0x55])))],
+        received
+    );
 
     Ok(())
 }

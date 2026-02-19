@@ -1,5 +1,6 @@
 ---
 source: src/cli/ui/listen_view.rs
+assertion_line: 168
 expression: view.to_string()
 ---
-[0042] Notification raw=05 00 01
+[0042] Notification

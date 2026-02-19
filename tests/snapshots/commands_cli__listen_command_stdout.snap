@@ -1,5 +1,6 @@
 ---
 source: tests/commands_cli.rs
+assertion_line: 70
 expression: stdout.trim_end()
 ---
 Connected device:
@@ -19,7 +20,7 @@ Listen session:
 │ initial_read │ DE AD BE EF                                                        │
 │ listening_on │ 0000fa03-0000-1000-8000-00805f9b34fb (iDotMatrix read/notify data) │
 ╰──────────────┴────────────────────────────────────────────────────────────────────╯
-[0001] GIF next package raw=05 00 01 00 01
-[0002] GIF finished raw=05 00 01 00 03
+[0001] GIF next package
+[0002] GIF finished
 
 Stopped: reached max notifications (2) - received 2 notification(s)

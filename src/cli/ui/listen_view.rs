@@ -72,21 +72,14 @@ impl Display for ListenReadyView<'_> {
 /// Renders a single notification line.
 pub(crate) struct ListenNotificationView<'a> {
     index: usize,
-    payload: &'a [u8],
     event_label: Option<String>,
     painter: &'a Painter,
 }
 
 impl<'a> ListenNotificationView<'a> {
-    pub(crate) fn new(
-        index: usize,
-        payload: &'a [u8],
-        event_label: Option<String>,
-        painter: &'a Painter,
-    ) -> Self {
+    pub(crate) fn new(index: usize, event_label: Option<String>, painter: &'a Painter) -> Self {
         Self {
             index,
-            payload,
             event_label,
             painter,
         }
@@ -97,15 +90,7 @@ impl Display for ListenNotificationView<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         let index_label = self.painter.muted(format!("[{:04}]", self.index));
         let event_label = self.event_label.as_deref().unwrap_or("Notification");
-        let raw_payload = self
-            .painter
-            .muted(format!("raw={}", format_hex(self.payload)));
-        write!(
-            f,
-            "{index_label} {} {}",
-            self.painter.value(event_label),
-            raw_payload
-        )
+        write!(f, "{index_label} {}", self.painter.value(event_label))
     }
 }
 
@@ -173,23 +158,16 @@ mod tests {
     }
 
     #[test]
-    fn notification_formats_index_and_hex() {
+    fn notification_formats_index() {
         let painter = Painter::new(false);
-        let payload = [0x05, 0x00, 0x01];
-        let view = ListenNotificationView::new(42, &payload, None, &painter);
+        let view = ListenNotificationView::new(42, None, &painter);
         assert_snapshot!("notification_line", view.to_string());
     }
 
     #[test]
     fn notification_formats_with_event_label() {
         let painter = Painter::new(false);
-        let payload = [0x05, 0x00, 0x01];
-        let view = ListenNotificationView::new(
-            42,
-            &payload,
-            Some("Text next package".to_string()),
-            &painter,
-        );
+        let view = ListenNotificationView::new(42, Some("Text next package".to_string()), &painter);
         assert_snapshot!("notification_line_with_event", view.to_string());
     }
 

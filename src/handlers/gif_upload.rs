@@ -10,8 +10,8 @@ use crate::error::ProtocolError;
 use crate::hw::{DeviceSession, GifHeaderProfile, PanelDimensions, WriteMode};
 use crate::protocol::EndpointId;
 use crate::{
-    FrameCodec, GifAnimation, GifChunkFlag, GifHeaderFields, NotificationDecodeError,
-    NotificationHandler, NotifyEvent, TransferFamily,
+    FrameCodec, GifAnimation, GifChunkFlag, GifHeaderFields, NotificationDecodeError, NotifyEvent,
+    TransferFamily,
 };
 
 const LOGICAL_CHUNK_SIZE: usize = 4096;
@@ -575,8 +575,8 @@ async fn wait_for_gif_ack(
         session.run_notifications(
             EndpointId::ReadNotifyCharacteristic,
             Some(1),
-            |_index, payload| {
-                decoded_event = Some(NotificationHandler::decode(payload));
+            |_index, event| {
+                decoded_event = Some(event);
             },
         ),
     )

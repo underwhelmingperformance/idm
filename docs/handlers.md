@@ -317,6 +317,8 @@ Behaviour:
 - Compute CRC32 over logical text payload.
 - Chunk at protocol size and then transport size.
 - Use notification-driven pacing with fallback timeout policy.
+- Consume typed notification events from the session API rather than decoding
+  raw notify payload bytes in handler code.
 - CLI wired: `idm control text <text>`.
 
 ## GIF Upload Handler
@@ -343,6 +345,8 @@ Behaviour:
 - Top-level `image` command detects GIF input and routes to this handler.
 - Use notification-driven flow control.
 - Drain stale notify events before upload to reduce cross-command ACK bleed.
+- Consume typed notification events from the session API rather than decoding
+  raw notify payload bytes in handler code.
 - CLI wired via top-level `idm image <image_file>`.
 
 ## Image Upload Handler (Non-DIY)
@@ -369,6 +373,8 @@ Behaviour:
 - Keep file/container decoding and resize/rotation outside this handler.
 - Align tail/profile bytes to target firmware behaviour.
 - Reuse chunker and flow-control primitives from GIF handler.
+- Consume typed notification events from the session API rather than decoding
+  raw notify payload bytes in handler code.
 - CLI wired via top-level `idm image <image_file>`.
 
 ## DIY Upload Handler (Raw RGB)

@@ -9,6 +9,7 @@ use super::model::{
 use super::model_overrides::ModelResolutionConfig;
 use super::profile::DeviceProfile;
 use crate::error::InteractionError;
+use crate::notification::{NotificationDecodeError, NotificationHandler, NotifyEvent};
 use crate::protocol::EndpointId;
 
 /// Creates a hardware client backed by the real BLE transport.
@@ -315,7 +316,7 @@ impl DeviceSession {
     ///
     /// # Errors
     ///
-    /// Returns an error if notification handling fails.
+    /// Returns an error if notification transport handling fails.
     #[instrument(
         skip(self, on_notification),
         level = "trace",
@@ -328,9 +329,11 @@ impl DeviceSession {
         mut on_notification: F,
     ) -> Result<NotificationRunSummary, InteractionError>
     where
-        F: FnMut(usize, &[u8]),
+        F: FnMut(usize, Result<NotifyEvent, NotificationDecodeError>),
     {
-        let mut adapter = |index: usize, payload: Vec<u8>| on_notification(index, &payload);
+        let mut adapter = |index: usize, payload: Vec<u8>| {
+            on_notification(index, NotificationHandler::decode(&payload))
+        };
         self.session
             .run_notifications(endpoint, max_notifications, &mut adapter)
             .await
@@ -352,7 +355,7 @@ impl DeviceSession {
         mut on_notification: F,
     ) -> Result<ListenSummary, InteractionError>
     where
-        F: FnMut(usize, &[u8]),
+        F: FnMut(usize, Result<NotifyEvent, NotificationDecodeError>),
     {
         let device = self.device().clone();
         let endpoint = EndpointId::ReadNotifyCharacteristic;
@@ -361,9 +364,8 @@ impl DeviceSession {
         self.subscribe_endpoint(endpoint).await?;
 
         let run_result = self
-            .session
-            .run_notifications(endpoint, max_notifications, &mut |index, payload| {
-                on_notification(index, &payload);
+            .run_notifications(endpoint, max_notifications, |index, event| {
+                on_notification(index, event);
             })
             .await;
 

@@ -39,6 +39,9 @@ pub use media::{
     GifAnimation, GifAnimationError, ImagePreparationError, ImagePreprocessor, PreparedImageUpload,
     PreparedStillImage, Rgb888Frame, Rgb888FrameError,
 };
-pub use notification::{NotificationDecodeError, NotificationHandler, NotifyEvent, TransferFamily};
+pub use notification::{
+    NotificationDecodeError, NotificationHandler, NotifyEvent, ScheduleMasterSwitchStatus,
+    ScheduleSetupStatus, TransferFamily,
+};
 pub use protocol::EndpointId;
 pub use terminal::TerminalClient;
