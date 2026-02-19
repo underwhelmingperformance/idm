@@ -11,8 +11,7 @@ use idm::{
 #[tokio::main]
 async fn main() -> ExitCode {
     let args = Args::parse();
-    let stdout = std::io::stdout();
-    let mut stdout = stdout.lock();
+    let mut stdout = std::io::stdout();
 
     let run_result = async {
         let log_level = args.log_level();

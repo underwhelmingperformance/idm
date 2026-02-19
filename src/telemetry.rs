@@ -80,6 +80,7 @@ fn initialise_tracing_once(
                 fmt::layer()
                     .json()
                     .with_target(false)
+                    .with_writer(io::stderr)
                     .with_filter(log_filter.clone()),
             )
             .with(OpenTelemetryLayer::new(tracer).with_filter(log_filter))
