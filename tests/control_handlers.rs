@@ -194,8 +194,8 @@ async fn gif_upload_handler_surfaces_device_rejection_status() -> anyhow::Result
 
     assert_matches!(
         result,
-        Err(idm::ProtocolError::GifUpload(error))
-            if matches!(*error, idm::GifUploadError::TransferRejected { status: 0x02 })
+        Err(idm::ProtocolError::UploadAck(error))
+            if matches!(*error, idm::UploadAckError::TransferRejected { status: 0x02 })
     );
 
     session.close().await?;
@@ -304,8 +304,8 @@ async fn gif_upload_handler_times_out_when_ack_is_missing() -> anyhow::Result<()
 
     assert_matches!(
         result,
-        Err(idm::ProtocolError::GifUpload(error))
-            if matches!(*error, idm::GifUploadError::NotifyAckTimeout { .. })
+        Err(idm::ProtocolError::UploadAck(error))
+            if matches!(*error, idm::UploadAckError::Timeout { .. })
     );
     session.close().await?;
     Ok(())
@@ -325,8 +325,8 @@ async fn gif_upload_handler_surfaces_stream_closure_as_missing_ack() -> anyhow::
 
     assert_matches!(
         result,
-        Err(idm::ProtocolError::GifUpload(error))
-            if matches!(*error, idm::GifUploadError::MissingNotifyAck)
+        Err(idm::ProtocolError::UploadAck(error))
+            if matches!(*error, idm::UploadAckError::MissingAck)
     );
 
     session.close().await?;
@@ -350,8 +350,8 @@ async fn gif_upload_handler_rejects_unexpected_ack_event() -> anyhow::Result<()>
 
     assert_matches!(
         result,
-        Err(idm::ProtocolError::GifUpload(error))
-            if matches!(*error, idm::GifUploadError::UnexpectedNotifyEvent)
+        Err(idm::ProtocolError::UploadAck(error))
+            if matches!(*error, idm::UploadAckError::UnexpectedEvent)
     );
 
     session.close().await?;
@@ -404,8 +404,8 @@ async fn gif_upload_handler_surfaces_non_final_chunk_rejection() -> anyhow::Resu
 
     assert_matches!(
         result,
-        Err(idm::ProtocolError::GifUpload(error))
-            if matches!(*error, idm::GifUploadError::TransferRejected { status: 0x07 })
+        Err(idm::ProtocolError::UploadAck(error))
+            if matches!(*error, idm::UploadAckError::TransferRejected { status: 0x07 })
     );
 
     session.close().await?;
@@ -431,8 +431,8 @@ async fn gif_upload_handler_surfaces_last_chunk_rejection() -> anyhow::Result<()
 
     assert_matches!(
         result,
-        Err(idm::ProtocolError::GifUpload(error))
-            if matches!(*error, idm::GifUploadError::TransferRejected { status: 0x11 })
+        Err(idm::ProtocolError::UploadAck(error))
+            if matches!(*error, idm::UploadAckError::TransferRejected { status: 0x11 })
     );
 
     session.close().await?;
@@ -457,8 +457,8 @@ async fn image_upload_handler_times_out_when_ack_is_missing() -> anyhow::Result<
 
     assert_matches!(
         result,
-        Err(idm::ProtocolError::ImageUpload(error))
-            if matches!(*error, idm::ImageUploadError::NotifyAckTimeout { .. })
+        Err(idm::ProtocolError::UploadAck(error))
+            if matches!(*error, idm::UploadAckError::Timeout { .. })
     );
     session.close().await?;
     Ok(())
@@ -477,8 +477,8 @@ async fn image_upload_handler_surfaces_stream_closure_as_missing_ack() -> anyhow
 
     assert_matches!(
         result,
-        Err(idm::ProtocolError::ImageUpload(error))
-            if matches!(*error, idm::ImageUploadError::MissingNotifyAck)
+        Err(idm::ProtocolError::UploadAck(error))
+            if matches!(*error, idm::UploadAckError::MissingAck)
     );
 
     session.close().await?;
@@ -501,8 +501,8 @@ async fn image_upload_handler_rejects_unexpected_ack_event() -> anyhow::Result<(
 
     assert_matches!(
         result,
-        Err(idm::ProtocolError::ImageUpload(error))
-            if matches!(*error, idm::ImageUploadError::UnexpectedNotifyEvent)
+        Err(idm::ProtocolError::UploadAck(error))
+            if matches!(*error, idm::UploadAckError::UnexpectedEvent)
     );
 
     session.close().await?;
@@ -526,8 +526,8 @@ async fn image_upload_handler_surfaces_device_rejection_status() -> anyhow::Resu
 
     assert_matches!(
         result,
-        Err(idm::ProtocolError::ImageUpload(error))
-            if matches!(*error, idm::ImageUploadError::TransferRejected { status: 0x02 })
+        Err(idm::ProtocolError::UploadAck(error))
+            if matches!(*error, idm::UploadAckError::TransferRejected { status: 0x02 })
     );
 
     session.close().await?;
@@ -576,8 +576,8 @@ async fn image_upload_handler_surfaces_non_final_chunk_rejection() -> anyhow::Re
 
     assert_matches!(
         result,
-        Err(idm::ProtocolError::ImageUpload(error))
-            if matches!(*error, idm::ImageUploadError::TransferRejected { status: 0x0A })
+        Err(idm::ProtocolError::UploadAck(error))
+            if matches!(*error, idm::UploadAckError::TransferRejected { status: 0x0A })
     );
 
     session.close().await?;
@@ -601,8 +601,8 @@ async fn image_upload_handler_surfaces_last_chunk_rejection() -> anyhow::Result<
 
     assert_matches!(
         result,
-        Err(idm::ProtocolError::ImageUpload(error))
-            if matches!(*error, idm::ImageUploadError::TransferRejected { status: 0x0B })
+        Err(idm::ProtocolError::UploadAck(error))
+            if matches!(*error, idm::UploadAckError::TransferRejected { status: 0x0B })
     );
 
     session.close().await?;
