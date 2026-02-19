@@ -290,7 +290,7 @@ impl MediaHeaderTail {
     /// use idm::{MaterialSlot, MediaHeaderTail};
     ///
     /// let tail = MediaHeaderTail::default();
-    /// assert_eq!(MaterialSlot::SHOW_NOW, tail.slot());
+    /// assert_eq!(MaterialSlot::NO_TIME_SIGNATURE, tail.slot());
     /// ```
     #[must_use]
     pub const fn slot(self) -> MaterialSlot {
@@ -306,7 +306,7 @@ impl MediaHeaderTail {
     /// use idm::{MaterialTimeSign, MediaHeaderTail};
     ///
     /// let tail = MediaHeaderTail::default();
-    /// assert_eq!(Some(MaterialTimeSign::FiveSeconds), tail.time_sign());
+    /// assert_eq!(None, tail.time_sign());
     ///
     /// let no_time = MediaHeaderTail::NoTimeSignature;
     /// assert_eq!(None, no_time.time_sign());
@@ -362,7 +362,7 @@ impl MediaHeaderTail {
 
 impl Default for MediaHeaderTail {
     fn default() -> Self {
-        Self::timed(TimedMaterialSlot::default(), MaterialTimeSign::default())
+        Self::NoTimeSignature
     }
 }
 
@@ -859,7 +859,7 @@ impl FrameCodec {
     /// let fields = GifHeaderFields::new(0x08B9, GifChunkFlag::Continuation, 0x0000_18B9, 0x14CB_42DB)?;
     /// let header = FrameCodec::encode_gif_header(fields);
     /// assert_eq!(
-    ///     [0xC9, 0x08, 0x01, 0x00, 0x02, 0xB9, 0x18, 0x00, 0x00, 0xDB, 0x42, 0xCB, 0x14, 0x05, 0x00, 0x0D],
+    ///     [0xC9, 0x08, 0x01, 0x00, 0x02, 0xB9, 0x18, 0x00, 0x00, 0xDB, 0x42, 0xCB, 0x14, 0x00, 0x00, 0x0C],
     ///     header
     /// );
     /// # Ok::<(), idm::FrameCodecError>(())
@@ -875,9 +875,9 @@ impl FrameCodec {
         header[4] = fields.chunk_flag.as_protocol_byte();
         header[5..9].copy_from_slice(&fields.payload_len.to_le_bytes());
         header[9..13].copy_from_slice(&fields.crc32.to_le_bytes());
-        header[13] = 0x05;
+        header[13] = 0x00;
         header[14] = 0x00;
-        header[15] = 0x0D;
+        header[15] = MEDIA_SLOT_NO_TIME_SIGNATURE;
         header
     }
 
@@ -889,7 +889,7 @@ impl FrameCodec {
     /// let fields = ImageHeaderFields::new(0x1000, GifChunkFlag::Continuation, 0x0000_2000, 0x1122_3344)?;
     /// let header = FrameCodec::encode_image_header(fields);
     /// assert_eq!(
-    ///     [0x10, 0x10, 0x02, 0x00, 0x02, 0x00, 0x20, 0x00, 0x00, 0x44, 0x33, 0x22, 0x11, 0x05, 0x00, 0x0D],
+    ///     [0x10, 0x10, 0x02, 0x00, 0x02, 0x00, 0x20, 0x00, 0x00, 0x44, 0x33, 0x22, 0x11, 0x00, 0x00, 0x0C],
     ///     header
     /// );
     /// # Ok::<(), idm::FrameCodecError>(())
@@ -905,9 +905,9 @@ impl FrameCodec {
         header[4] = fields.chunk_flag.as_protocol_byte();
         header[5..9].copy_from_slice(&fields.payload_len.to_le_bytes());
         header[9..13].copy_from_slice(&fields.crc32.to_le_bytes());
-        header[13] = 0x05;
+        header[13] = 0x00;
         header[14] = 0x00;
-        header[15] = 0x0D;
+        header[15] = MEDIA_SLOT_NO_TIME_SIGNATURE;
         header
     }
 
@@ -1057,8 +1057,8 @@ mod tests {
         let header = FrameCodec::encode_gif_header(fields);
         assert_eq!(
             [
-                0xC9, 0x08, 0x01, 0x00, 0x02, 0xB9, 0x18, 0x00, 0x00, 0xDB, 0x42, 0xCB, 0x14, 0x05,
-                0x00, 0x0D,
+                0xC9, 0x08, 0x01, 0x00, 0x02, 0xB9, 0x18, 0x00, 0x00, 0xDB, 0x42, 0xCB, 0x14, 0x00,
+                0x00, 0x0C,
             ],
             header
         );
@@ -1072,8 +1072,8 @@ mod tests {
         let header = FrameCodec::encode_image_header(fields);
         assert_eq!(
             [
-                0x10, 0x10, 0x02, 0x00, 0x02, 0x00, 0x20, 0x00, 0x00, 0x44, 0x33, 0x22, 0x11, 0x05,
-                0x00, 0x0D,
+                0x10, 0x10, 0x02, 0x00, 0x02, 0x00, 0x20, 0x00, 0x00, 0x44, 0x33, 0x22, 0x11, 0x00,
+                0x00, 0x0C,
             ],
             header
         );

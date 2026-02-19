@@ -9,6 +9,7 @@ async-trait = "0.1.89"
 bon = "3.9.0"
 btleplug = "0.11.8"
 clap = { version = "4.5.58", features = ["derive"] }
+color_quant = "1.1.0"
 crc32fast = "1.5.0"
 derive_more = { version = "2.1.1", features = ["display", "from", "into"] }
 directories = "6.0.0"

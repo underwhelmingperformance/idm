@@ -270,3 +270,52 @@ async fn image_command_uploads_transformed_payload() -> anyhow::Result<()> {
     std::fs::remove_file(file_path)?;
     Ok(())
 }
+
+#[tokio::test]
+async fn image_command_saves_preprocessed_gif_when_requested() -> anyhow::Result<()> {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system clock should be after unix epoch")
+        .as_nanos();
+    let source_path = std::env::temp_dir().join(format!(
+        "idm-image-save-gif-source-{}-{timestamp}.gif",
+        std::process::id()
+    ));
+    let output_path = std::env::temp_dir().join(format!(
+        "idm-image-save-gif-output-{}-{timestamp}.gif",
+        std::process::id()
+    ));
+    std::fs::write(
+        &source_path,
+        [
+            0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00, 0x00, 0x00,
+            0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x21, 0xF9, 0x04, 0x01, 0x00, 0x00, 0x00, 0x00, 0x2C,
+            0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x02, 0x44, 0x01, 0x00,
+            0x3B,
+        ],
+    )?;
+
+    let source_arg = source_path.display().to_string();
+    let output_arg = output_path.display().to_string();
+    let _stdout = run_with_argv([
+        "idm",
+        "--fake",
+        "--fake-scan",
+        "hci0|AA:BB:CC|IDM-16-Clock|-43",
+        "image",
+        &source_arg,
+        "--save-gif",
+        &output_arg,
+    ])
+    .await?;
+
+    let saved = std::fs::read(&output_path)?;
+    assert!(
+        saved.starts_with(b"GIF89a") || saved.starts_with(b"GIF87a"),
+        "saved preprocessed payload should be a GIF stream"
+    );
+
+    std::fs::remove_file(source_path)?;
+    std::fs::remove_file(output_path)?;
+    Ok(())
+}

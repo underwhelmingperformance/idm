@@ -580,7 +580,7 @@ mod tests {
     #[rstest]
     #[case(
         MediaHeaderTail::default(),
-        [0x05, 0x00, 0x0D]
+        [0x00, 0x00, 0x0C]
     )]
     #[case(
         MediaHeaderTail::NoTimeSignature,

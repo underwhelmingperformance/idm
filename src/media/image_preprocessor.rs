@@ -1,12 +1,18 @@
+use std::collections::{HashMap, HashSet};
 use std::io::Cursor;
 
 use image::imageops::FilterType;
-use image::{AnimationDecoder, Delay, DynamicImage, GenericImageView};
+use image::{DynamicImage, GenericImageView};
 use thiserror::Error;
 
 use crate::hw::PanelDimensions;
 
 use super::{GifAnimation, Rgb888Frame};
+
+const MAX_GIF_FRAMES: usize = 64;
+const MIN_GIF_DELAY_CENTISECONDS: u16 = 1;
+const GIF_QUANTISATION_SPEED: i32 = 1;
+const MAX_GIF_PALETTE_COLOURS: usize = 256;
 
 /// Errors returned when preparing an image for panel upload.
 #[derive(Debug, Error)]
@@ -17,6 +23,9 @@ pub enum ImagePreparationError {
     /// The source image failed to decode.
     #[error("failed to decode source image")]
     Decode(#[source] image::ImageError),
+    /// The source GIF stream failed to decode.
+    #[error("failed to decode source gif")]
+    GifDecode { source: gif::DecodingError },
     /// GIF re-encoding failed after frame transformation.
     #[error("failed to encode transformed gif payload")]
     GifEncode { source: gif::EncodingError },
@@ -130,45 +139,275 @@ impl ImagePreprocessor {
         source_bytes: &[u8],
         panel_dimensions: PanelDimensions,
     ) -> Result<GifAnimation, ImagePreparationError> {
-        let decoder = image::codecs::gif::GifDecoder::new(Cursor::new(source_bytes))
-            .map_err(ImagePreparationError::Decode)?;
-        let frames = decoder
-            .into_frames()
-            .collect_frames()
-            .map_err(ImagePreparationError::Decode)?;
-        if frames.is_empty() {
-            return Err(ImagePreparationError::GifHasNoFrames);
+        let source_gif = GifAnimation::try_from(source_bytes)?;
+        if source_gif.dimensions() == panel_dimensions {
+            return Ok(source_gif);
         }
 
+        let mut decoder = gif::DecodeOptions::new();
+        decoder.set_color_output(gif::ColorOutput::Indexed);
+        let mut reader = decoder
+            .read_info(Cursor::new(source_bytes))
+            .map_err(|source| ImagePreparationError::GifDecode { source })?;
+        let global_palette = reader.global_palette().map(ToOwned::to_owned);
+        let source_width = u32::from(reader.width());
+        let source_height = u32::from(reader.height());
+        let mut composite_canvas = image::RgbaImage::from_pixel(
+            source_width,
+            source_height,
+            image::Rgba([0x00, 0x00, 0x00, 0xFF]),
+        );
         let orientation = exif_orientation(source_bytes);
         let panel_width = panel_dimensions.width();
         let panel_height = panel_dimensions.height();
+        let mut transformed_frames = Vec::new();
 
-        let mut transformed_payload = Vec::new();
-        {
-            let mut encoder =
-                gif::Encoder::new(&mut transformed_payload, panel_width, panel_height, &[])
-                    .map_err(|source| ImagePreparationError::GifEncode { source })?;
-            encoder
-                .set_repeat(gif::Repeat::Infinite)
-                .map_err(|source| ImagePreparationError::GifEncode { source })?;
+        while transformed_frames.len() < MAX_GIF_FRAMES {
+            let Some(frame) = reader
+                .read_next_frame()
+                .map_err(|source| ImagePreparationError::GifDecode { source })?
+            else {
+                break;
+            };
+            composite_indexed_frame(&mut composite_canvas, frame, global_palette.as_deref());
+            let dynamic = DynamicImage::ImageRgba8(composite_canvas.clone());
+            let oriented = apply_orientation(dynamic, orientation);
+            let padded = resize_and_pad_rgba(oriented, panel_dimensions);
+            transformed_frames.push(PreparedGifFrame {
+                rgba_pixels: padded.into_raw(),
+                delay_centiseconds: frame.delay.max(MIN_GIF_DELAY_CENTISECONDS),
+            });
 
-            for frame in frames {
-                let delay = frame.delay();
-                let dynamic = DynamicImage::ImageRgba8(frame.into_buffer());
-                let oriented = apply_orientation(dynamic, orientation);
-                let padded = resize_and_pad_rgba(oriented, panel_dimensions);
-                let mut rgba_bytes = padded.into_raw();
-                let mut encoded_frame =
-                    gif::Frame::from_rgba_speed(panel_width, panel_height, &mut rgba_bytes, 10);
-                encoded_frame.delay = delay_to_centiseconds(delay);
-                encoder
-                    .write_frame(&encoded_frame)
-                    .map_err(|source| ImagePreparationError::GifEncode { source })?;
+            if frame.dispose == gif::DisposalMethod::Background {
+                clear_rect(
+                    &mut composite_canvas,
+                    u32::from(frame.left),
+                    u32::from(frame.top),
+                    u32::from(frame.width),
+                    u32::from(frame.height),
+                );
+            }
+        }
+        if transformed_frames.is_empty() {
+            return Err(ImagePreparationError::GifHasNoFrames);
+        }
+
+        let transformed_payload =
+            encode_gif_frames_with_shared_palette(panel_width, panel_height, &transformed_frames)?;
+        let transformed_payload = strip_empty_global_palette(transformed_payload);
+        Ok(GifAnimation::try_from(transformed_payload)?)
+    }
+}
+
+struct PreparedGifFrame {
+    rgba_pixels: Vec<u8>,
+    delay_centiseconds: u16,
+}
+
+enum SharedGifPaletteIndexer {
+    Exact(HashMap<[u8; 4], u8>),
+    Quantised(color_quant::NeuQuant),
+}
+
+struct SharedGifPalette {
+    palette_bytes: Vec<u8>,
+    indexer: SharedGifPaletteIndexer,
+}
+
+impl SharedGifPalette {
+    fn build(frames: &[PreparedGifFrame]) -> Self {
+        let mut unique_colours = HashSet::new();
+        for frame in frames {
+            for rgba_pixel in frame.rgba_pixels.chunks_exact(4) {
+                unique_colours.insert([rgba_pixel[0], rgba_pixel[1], rgba_pixel[2], rgba_pixel[3]]);
+                if unique_colours.len() > MAX_GIF_PALETTE_COLOURS {
+                    return Self::build_quantised(frames);
+                }
             }
         }
 
-        Ok(GifAnimation::try_from(transformed_payload)?)
+        let mut colours: Vec<[u8; 4]> = unique_colours.into_iter().collect();
+        colours.sort_unstable();
+        let palette_bytes = colours
+            .iter()
+            .flat_map(|colour| [colour[0], colour[1], colour[2]])
+            .collect();
+        let mut lookup = HashMap::with_capacity(colours.len());
+        for (index, colour) in colours.into_iter().enumerate() {
+            let index = u8::try_from(index)
+                .expect("exact palette length is bounded by MAX_GIF_PALETTE_COLOURS");
+            lookup.insert(colour, index);
+        }
+
+        Self {
+            palette_bytes,
+            indexer: SharedGifPaletteIndexer::Exact(lookup),
+        }
+    }
+
+    fn build_quantised(frames: &[PreparedGifFrame]) -> Self {
+        let sample_size = frames.iter().map(|frame| frame.rgba_pixels.len()).sum();
+        let mut sampled_pixels = Vec::with_capacity(sample_size);
+        for frame in frames {
+            sampled_pixels.extend_from_slice(&frame.rgba_pixels);
+        }
+
+        let quantiser = color_quant::NeuQuant::new(
+            GIF_QUANTISATION_SPEED,
+            MAX_GIF_PALETTE_COLOURS,
+            &sampled_pixels,
+        );
+        let palette_bytes = quantiser.color_map_rgb();
+        Self {
+            palette_bytes,
+            indexer: SharedGifPaletteIndexer::Quantised(quantiser),
+        }
+    }
+
+    fn palette_bytes(&self) -> &[u8] {
+        &self.palette_bytes
+    }
+
+    fn index_pixels(&self, rgba_pixels: &[u8]) -> Vec<u8> {
+        match &self.indexer {
+            SharedGifPaletteIndexer::Exact(lookup) => rgba_pixels
+                .chunks_exact(4)
+                .map(|rgba_pixel| {
+                    let rgba = [rgba_pixel[0], rgba_pixel[1], rgba_pixel[2], rgba_pixel[3]];
+                    lookup.get(&rgba).copied().unwrap_or_default()
+                })
+                .collect(),
+            SharedGifPaletteIndexer::Quantised(quantiser) => rgba_pixels
+                .chunks_exact(4)
+                .map(|rgba_pixel| quantiser.index_of(rgba_pixel) as u8)
+                .collect(),
+        }
+    }
+}
+
+fn encode_gif_frames_with_shared_palette(
+    panel_width: u16,
+    panel_height: u16,
+    frames: &[PreparedGifFrame],
+) -> Result<Vec<u8>, ImagePreparationError> {
+    let shared_palette = SharedGifPalette::build(frames);
+    let frame_palette = shared_palette.palette_bytes().to_vec();
+    let mut transformed_payload = Vec::new();
+    {
+        let mut encoder =
+            gif::Encoder::new(&mut transformed_payload, panel_width, panel_height, &[])
+                .map_err(|source| ImagePreparationError::GifEncode { source })?;
+        encoder
+            .set_repeat(gif::Repeat::Infinite)
+            .map_err(|source| ImagePreparationError::GifEncode { source })?;
+
+        for frame in frames {
+            let indexed_pixels = shared_palette.index_pixels(&frame.rgba_pixels);
+            let mut encoded_frame = gif::Frame::from_palette_pixels(
+                panel_width,
+                panel_height,
+                indexed_pixels,
+                frame_palette.clone(),
+                None,
+            );
+            encoded_frame.delay = frame.delay_centiseconds;
+            encoded_frame.dispose = gif::DisposalMethod::Background;
+            encoder
+                .write_frame(&encoded_frame)
+                .map_err(|source| ImagePreparationError::GifEncode { source })?;
+        }
+    }
+    Ok(transformed_payload)
+}
+
+fn strip_empty_global_palette(mut payload: Vec<u8>) -> Vec<u8> {
+    const LOGICAL_SCREEN_DESCRIPTOR_LEN: usize = 13;
+    const GLOBAL_COLOR_TABLE_FLAG: u8 = 0x80;
+    const GLOBAL_COLOR_TABLE_SIZE_MASK: u8 = 0x07;
+
+    if payload.len() < LOGICAL_SCREEN_DESCRIPTOR_LEN {
+        return payload;
+    }
+
+    let packed = payload[10];
+    if packed & GLOBAL_COLOR_TABLE_FLAG == 0 {
+        return payload;
+    }
+
+    let table_size_code = usize::from(packed & GLOBAL_COLOR_TABLE_SIZE_MASK);
+    let entries = 1usize << (table_size_code + 1);
+    let table_len = entries.saturating_mul(3);
+    let table_start = LOGICAL_SCREEN_DESCRIPTOR_LEN;
+    let table_end = table_start.saturating_add(table_len);
+    if table_end > payload.len() {
+        return payload;
+    }
+
+    if payload[table_start..table_end]
+        .iter()
+        .any(|byte| *byte != 0)
+    {
+        return payload;
+    }
+
+    payload[10] = packed & !GLOBAL_COLOR_TABLE_FLAG;
+    payload.drain(table_start..table_end);
+    payload
+}
+
+fn composite_indexed_frame(
+    canvas: &mut image::RgbaImage,
+    frame: &gif::Frame<'_>,
+    global_palette: Option<&[u8]>,
+) {
+    let palette = frame.palette.as_deref().or(global_palette);
+    let Some(palette_bytes) = palette else {
+        return;
+    };
+
+    let frame_width = usize::from(frame.width);
+    for y in 0..frame.height {
+        for x in 0..frame.width {
+            let row_offset = usize::from(y) * frame_width;
+            let pixel_index = row_offset + usize::from(x);
+            let colour_index = frame.buffer[pixel_index];
+            if frame.transparent == Some(colour_index) {
+                continue;
+            }
+            let palette_offset = usize::from(colour_index) * 3;
+            if palette_offset + 2 >= palette_bytes.len() {
+                continue;
+            }
+            let target_x = u32::from(frame.left) + u32::from(x);
+            let target_y = u32::from(frame.top) + u32::from(y);
+            if target_x >= canvas.width() || target_y >= canvas.height() {
+                continue;
+            }
+            canvas.put_pixel(
+                target_x,
+                target_y,
+                image::Rgba([
+                    palette_bytes[palette_offset],
+                    palette_bytes[palette_offset + 1],
+                    palette_bytes[palette_offset + 2],
+                    0xFF,
+                ]),
+            );
+        }
+    }
+}
+
+fn clear_rect(canvas: &mut image::RgbaImage, left: u32, top: u32, width: u32, height: u32) {
+    if width == 0 || height == 0 {
+        return;
+    }
+
+    let x_end = left.saturating_add(width).min(canvas.width());
+    let y_end = top.saturating_add(height).min(canvas.height());
+    for y in top..y_end {
+        for x in left..x_end {
+            canvas.put_pixel(x, y, image::Rgba([0x00, 0x00, 0x00, 0xFF]));
+        }
     }
 }
 
@@ -225,23 +464,13 @@ fn resize_and_pad_rgba(image: DynamicImage, panel_dimensions: PanelDimensions) -
 
     let offset_x = i64::from((panel_width - target_width) / 2);
     let offset_y = i64::from((panel_height - target_height) / 2);
-    image::imageops::replace(&mut canvas, &resized, offset_x, offset_y);
+    image::imageops::overlay(&mut canvas, &resized, offset_x, offset_y);
     canvas
-}
-
-fn delay_to_centiseconds(delay: Delay) -> u16 {
-    let (numerator, denominator) = delay.numer_denom_ms();
-    if denominator == 0 {
-        return 0;
-    }
-    let millis = (u64::from(numerator) + (u64::from(denominator) / 2)) / u64::from(denominator);
-    let centiseconds = millis.div_ceil(10);
-    u16::try_from(centiseconds).unwrap_or(u16::MAX)
 }
 
 #[cfg(test)]
 mod tests {
-    use image::ImageEncoder;
+    use image::{AnimationDecoder, ImageEncoder};
     use pretty_assertions::assert_eq;
 
     use super::*;
@@ -292,5 +521,135 @@ mod tests {
             }
         }
         Ok(())
+    }
+
+    #[test]
+    fn prepare_for_upload_gif_frames_are_opaque_with_background_disposal()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let panel = PanelDimensions::new(2, 2).expect("2x2 should be valid");
+        let source = make_source_gif(1, 0, [0xFF, 0x00, 0x00, 0x00])?;
+        let prepared = ImagePreprocessor::prepare_for_upload(&source, panel)?;
+
+        let PreparedImageUpload::Gif(gif) = prepared else {
+            panic!("gif should produce gif upload");
+        };
+
+        let options = gif::DecodeOptions::new();
+        let mut reader = options.read_info(Cursor::new(gif.payload()))?;
+        let frame = reader
+            .read_next_frame()?
+            .expect("re-encoded gif should contain one frame");
+
+        assert_eq!(None, frame.transparent);
+        assert_eq!(gif::DisposalMethod::Background, frame.dispose);
+        assert_eq!(MIN_GIF_DELAY_CENTISECONDS, frame.delay);
+        Ok(())
+    }
+
+    #[test]
+    fn prepare_for_upload_limits_gif_frame_count() -> Result<(), Box<dyn std::error::Error>> {
+        let panel = PanelDimensions::new(2, 2).expect("2x2 should be valid");
+        let source = make_source_gif(MAX_GIF_FRAMES + 8, 2, [0x10, 0x20, 0x30, 0xFF])?;
+        let prepared = ImagePreprocessor::prepare_for_upload(&source, panel)?;
+
+        let PreparedImageUpload::Gif(gif) = prepared else {
+            panic!("gif should produce gif upload");
+        };
+        assert_eq!(MAX_GIF_FRAMES, gif_frame_count(gif.payload())?);
+        Ok(())
+    }
+
+    #[test]
+    fn prepare_for_upload_preserves_native_panel_gif_bytes()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let panel = PanelDimensions::new(1, 1).expect("1x1 should be valid");
+        let prepared = ImagePreprocessor::prepare_for_upload(&MINIMAL_GIF_1X1, panel)?;
+
+        let PreparedImageUpload::Gif(gif) = prepared else {
+            panic!("gif should produce gif upload");
+        };
+        assert_eq!(MINIMAL_GIF_1X1.as_slice(), gif.payload());
+        Ok(())
+    }
+
+    #[test]
+    fn prepare_for_upload_composites_transparent_gif_delta_frames()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let panel = PanelDimensions::new(2, 2).expect("2x2 should be valid");
+        let source = make_transparent_delta_source_gif()?;
+        let prepared = ImagePreprocessor::prepare_for_upload(&source, panel)?;
+        let PreparedImageUpload::Gif(gif) = prepared else {
+            panic!("gif should produce gif upload");
+        };
+
+        let decoder = image::codecs::gif::GifDecoder::new(Cursor::new(gif.payload()))?;
+        let frames = decoder.into_frames().collect_frames()?;
+        assert_eq!(2, frames.len());
+
+        let first = frames[0].buffer();
+        let second = frames[1].buffer();
+        let first_unchanged = first.get_pixel(1, 1);
+        let second_unchanged = second.get_pixel(1, 1);
+        let first_changed = first.get_pixel(0, 0);
+        let second_changed = second.get_pixel(0, 0);
+
+        assert_eq!(first_unchanged, second_unchanged);
+        assert_ne!(first_changed, second_changed);
+        Ok(())
+    }
+
+    fn make_source_gif(
+        frames: usize,
+        delay_centiseconds: u16,
+        rgba_pixel: [u8; 4],
+    ) -> Result<Vec<u8>, gif::EncodingError> {
+        let mut payload = Vec::new();
+        {
+            let mut encoder = gif::Encoder::new(&mut payload, 1, 1, &[])?;
+            encoder.set_repeat(gif::Repeat::Infinite)?;
+
+            for _index in 0..frames {
+                let mut rgba = Vec::from(rgba_pixel);
+                let mut frame = gif::Frame::from_rgba_speed(1, 1, &mut rgba, 10);
+                frame.delay = delay_centiseconds;
+                encoder.write_frame(&frame)?;
+            }
+        }
+        Ok(payload)
+    }
+
+    fn gif_frame_count(payload: &[u8]) -> Result<usize, gif::DecodingError> {
+        let options = gif::DecodeOptions::new();
+        let mut reader = options.read_info(Cursor::new(payload))?;
+        let mut frames = 0usize;
+        while reader.read_next_frame()?.is_some() {
+            frames += 1;
+        }
+        Ok(frames)
+    }
+
+    fn make_transparent_delta_source_gif() -> Result<Vec<u8>, gif::EncodingError> {
+        let mut payload = Vec::new();
+        {
+            let mut encoder = gif::Encoder::new(&mut payload, 2, 2, &[])?;
+            encoder.set_repeat(gif::Repeat::Infinite)?;
+
+            let mut full_red = vec![
+                0xFF, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0xFF, 0xFF, 0x00,
+                0x00, 0xFF,
+            ];
+            let mut frame_one = gif::Frame::from_rgba_speed(2, 2, &mut full_red, 10);
+            frame_one.delay = 2;
+            encoder.write_frame(&frame_one)?;
+
+            let mut transparent_delta = vec![
+                0x00, 0x00, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x00, 0x00,
+            ];
+            let mut frame_two = gif::Frame::from_rgba_speed(2, 2, &mut transparent_delta, 10);
+            frame_two.delay = 2;
+            encoder.write_frame(&frame_two)?;
+        }
+        Ok(payload)
     }
 }

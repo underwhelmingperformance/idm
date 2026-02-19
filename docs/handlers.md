@@ -344,6 +344,15 @@ Behaviour:
 - Chunk raw GIF bytes at `4096` protocol chunk size.
 - Emit 16-byte GIF headers with proper flags/CRC and typed media-tail bytes
   (`MediaHeaderTail`).
+- Top-level `image` preprocessing now normalises uploaded GIF payloads for panel
+  compatibility:
+  panel-native GIFs (`width`/`height` already match active panel geometry) are
+  preserved byte-for-byte; non-native GIFs are transformed with frame count
+  capped at `64`, per-frame delay clamped to at least `10 ms`, source frames
+  composited with GIF disposal semantics before resizing, transparency flattened
+  against black, encoded disposal set to `DisposalBackground`, and re-encoded
+  with one shared global palette (no per-frame local colour tables) to avoid
+  frame-to-frame palette drift/flicker while remaining protocol-compatible.
 - Accept only syntactically valid GIF payloads via typed `GifAnimation`.
 - When device panel dimensions are known, reject GIFs whose logical screen
   dimensions differ.
@@ -362,6 +371,8 @@ Behaviour:
   raw notify payload bytes in handler code.
 - CLI wired via top-level `idm image <image_file>` using device-profile-aware
   automatic media-tail selection.
+- CLI supports optional `--save-gif <path>` to persist the preprocessed GIF
+  bytes for debugging before upload.
 
 ## Image Upload Handler (Non-DIY)
 

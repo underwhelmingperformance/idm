@@ -1100,6 +1100,7 @@ dependencies = [
  "bon",
  "btleplug",
  "clap",
+ "color_quant",
  "crc32fast",
  "derive_more",
  "directories",

@@ -446,4 +446,22 @@ mod tests {
         let Args { command, .. } = cli;
         assert_matches!(command, Command::Image(_));
     }
+
+    #[test]
+    fn image_command_parses_save_gif_argument() {
+        let cli =
+            Args::try_parse_from(["idm", "image", "photo.gif", "--save-gif", "normalised.gif"])
+                .expect("image --save-gif should parse");
+
+        let Args { command, .. } = cli;
+        let Command::Image(image) = command else {
+            panic!("expected image command");
+        };
+
+        assert_eq!(std::path::Path::new("photo.gif"), image.path());
+        assert_eq!(
+            Some(std::path::Path::new("normalised.gif")),
+            image.save_gif_path()
+        );
+    }
 }

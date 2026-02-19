@@ -1,7 +1,7 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Args;
 use serde::Serialize;
 use tracing::instrument;
@@ -10,7 +10,7 @@ use crate::cli::OutputFormat;
 use crate::hw::HardwareClient;
 use crate::{
     GifUploadHandler, GifUploadRequest, ImagePreprocessor, ImageUploadHandler, ImageUploadRequest,
-    MediaHeaderTail, PreparedImageUpload, SessionHandler,
+    PreparedImageUpload, SessionHandler,
 };
 
 /// JSON result emitted by `image` command.
@@ -30,6 +30,9 @@ enum ImageResult {
 pub struct ImageArgs {
     /// Path to a source image file.
     image_file: PathBuf,
+    /// Writes the preprocessed GIF payload to this path before upload.
+    #[arg(long, value_name = "PATH")]
+    save_gif: Option<PathBuf>,
 }
 
 impl ImageArgs {
@@ -48,7 +51,29 @@ impl ImageArgs {
     pub fn new(path: impl Into<PathBuf>) -> Self {
         Self {
             image_file: path.into(),
+            save_gif: None,
         }
+    }
+
+    /// Sets an output path for saving preprocessed GIF bytes.
+    ///
+    /// ```
+    /// use std::path::Path;
+    /// use std::path::PathBuf;
+    ///
+    /// use idm::ImageArgs;
+    ///
+    /// let args = ImageArgs::new(PathBuf::from("photo.gif"))
+    ///     .with_save_gif(PathBuf::from("normalised.gif"));
+    /// assert_eq!(
+    ///     Some(Path::new("normalised.gif")),
+    ///     args.save_gif_path(),
+    /// );
+    /// ```
+    #[must_use]
+    pub fn with_save_gif(mut self, path: impl Into<PathBuf>) -> Self {
+        self.save_gif = Some(path.into());
+        self
     }
 
     /// Returns the selected image file path.
@@ -65,6 +90,26 @@ impl ImageArgs {
     #[must_use]
     pub fn path(&self) -> &Path {
         &self.image_file
+    }
+
+    /// Returns the optional preprocessed GIF output path.
+    ///
+    /// ```
+    /// use std::path::Path;
+    /// use std::path::PathBuf;
+    ///
+    /// use idm::ImageArgs;
+    ///
+    /// let args = ImageArgs::new(PathBuf::from("photo.gif"))
+    ///     .with_save_gif(PathBuf::from("normalised.gif"));
+    /// assert_eq!(
+    ///     Some(Path::new("normalised.gif")),
+    ///     args.save_gif_path(),
+    /// );
+    /// ```
+    #[must_use]
+    pub fn save_gif_path(&self) -> Option<&Path> {
+        self.save_gif.as_deref()
     }
 }
 
@@ -112,12 +157,13 @@ where
         .with_context(|| format!("failed to read image file `{}`", args.path().display()))?;
     let prepared = ImagePreprocessor::prepare_for_upload(&source_bytes, panel_dimensions)
         .with_context(|| format!("failed to prepare image file `{}`", args.path().display()))?;
-    let media_header_tail = MediaHeaderTail::NoTimeSignature;
 
     match prepared {
         PreparedImageUpload::Still(still) => {
-            let request = ImageUploadRequest::new(still.into_frame())
-                .with_media_header_tail(media_header_tail);
+            if args.save_gif_path().is_some() {
+                bail!("cannot use `--save-gif` because input normalised to a still image payload");
+            }
+            let request = ImageUploadRequest::new(still.into_frame());
             let receipt = ImageUploadHandler::upload(session, request).await?;
             match output_format {
                 OutputFormat::Pretty => {}
@@ -135,7 +181,10 @@ where
             }
         }
         PreparedImageUpload::Gif(gif) => {
-            let request = GifUploadRequest::new(gif).with_media_header_tail(media_header_tail);
+            if let Some(path) = args.save_gif_path() {
+                save_preprocessed_gif(path, gif.payload())?;
+            }
+            let request = GifUploadRequest::new(gif);
             let receipt = GifUploadHandler::upload(session, request).await?;
             match output_format {
                 OutputFormat::Pretty => {}
@@ -159,5 +208,26 @@ where
 fn write_json_line(out: &mut impl io::Write, value: &impl Serialize) -> Result<()> {
     serde_json::to_writer_pretty(&mut *out, value)?;
     writeln!(out)?;
+    Ok(())
+}
+
+fn save_preprocessed_gif(path: &Path, payload: &[u8]) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).with_context(|| {
+                format!(
+                    "failed to create parent directory for preprocessed gif `{}`",
+                    path.display()
+                )
+            })?;
+        }
+    }
+    std::fs::write(path, payload).with_context(|| {
+        format!(
+            "failed to write preprocessed gif payload to `{}`",
+            path.display()
+        )
+    })?;
+    tracing::info!(path = %path.display(), bytes = payload.len(), "saved preprocessed gif payload");
     Ok(())
 }
