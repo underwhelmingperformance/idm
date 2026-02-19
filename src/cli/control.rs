@@ -1,5 +1,4 @@
 use std::io;
-use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand, ValueEnum};
@@ -11,8 +10,7 @@ use crate::cli::OutputFormat;
 use crate::hw::HardwareClient;
 use crate::{
     Brightness, BrightnessHandler, FullscreenColourHandler, PowerHandler, Rgb, ScreenPower,
-    SessionHandler, TextOptions, TextUploadHandler, TextUploadRequest, TimeSyncHandler,
-    UploadPacing,
+    SessionHandler, TextUploadHandler, TextUploadRequest, TimeSyncHandler,
 };
 
 /// JSON result emitted by a `control` action.
@@ -398,18 +396,7 @@ fn write_json_line(out: &mut impl io::Write, value: &impl Serialize) -> Result<(
 }
 
 fn default_cli_text_request(text: &str) -> TextUploadRequest {
-    TextUploadRequest::new(text.to_string())
-        .with_options(TextOptions::new(
-            0x00,
-            0x20,
-            0x01,
-            Rgb::new(0xFF, 0xFF, 0xFF),
-            0x00,
-            Rgb::new(0x00, 0x00, 0x00),
-        ))
-        .with_pacing(UploadPacing::NotifyAck {
-            timeout: Duration::from_secs(5),
-        })
+    TextUploadRequest::builder().text(text.to_string()).build()
 }
 
 #[cfg(test)]
@@ -421,18 +408,7 @@ mod tests {
     #[test]
     fn default_cli_text_request_uses_stable_defaults() {
         let request = default_cli_text_request("Hello");
-        let expected = TextUploadRequest::new("Hello")
-            .with_options(TextOptions::new(
-                0x00,
-                0x20,
-                0x01,
-                Rgb::new(0xFF, 0xFF, 0xFF),
-                0x00,
-                Rgb::new(0x00, 0x00, 0x00),
-            ))
-            .with_pacing(UploadPacing::NotifyAck {
-                timeout: Duration::from_secs(5),
-            });
+        let expected = TextUploadRequest::new("Hello");
 
         assert_eq!(expected, request);
     }

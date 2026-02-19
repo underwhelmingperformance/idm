@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use bon::Builder;
 use crc32fast::hash;
 use font8x8::UnicodeFonts;
 use idm_macros::progress;
@@ -56,14 +57,21 @@ pub enum UploadPacing {
 }
 
 /// Text upload rendering options.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Builder)]
 pub struct TextOptions {
+    #[builder(default = 0x00)]
     text_mode: u8,
+    #[builder(default = 0x20)]
     speed: u8,
+    #[builder(default = 0x01)]
     text_colour_mode: u8,
+    #[builder(default = Rgb::new(0xFF, 0xFF, 0xFF))]
     text_colour: Rgb,
+    #[builder(default = 0x00)]
     background_mode: u8,
+    #[builder(default = Rgb::new(0x00, 0x00, 0x00))]
     background_colour: Rgb,
+    #[builder(default = 16)]
     font_size: u8,
 }
 
@@ -109,23 +117,17 @@ impl TextOptions {
             font_size: 16,
         }
     }
-
-    /// Overrides font size used by `32x32` and `64x64` text paths.
-    ///
-    /// Supported values are `16`, `32`, and `64`. Invalid values are treated
-    /// as `16` during encoding.
-    #[must_use]
-    pub fn with_font_size(mut self, font_size: u8) -> Self {
-        self.font_size = font_size;
-        self
-    }
 }
 
 /// Text upload request.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Builder)]
 pub struct TextUploadRequest {
     text: String,
+    #[builder(default = TextOptions::default())]
     options: TextOptions,
+    #[builder(default = UploadPacing::NotifyAck {
+        timeout: DEFAULT_NOTIFY_ACK_TIMEOUT,
+    })]
     pacing: UploadPacing,
 }
 
@@ -147,45 +149,6 @@ impl TextUploadRequest {
                 timeout: DEFAULT_NOTIFY_ACK_TIMEOUT,
             },
         }
-    }
-
-    /// Overrides text rendering options.
-    ///
-    /// ```
-    /// use idm::{Rgb, TextOptions, TextUploadRequest};
-    ///
-    /// let request = TextUploadRequest::new("Hi").with_options(TextOptions::new(
-    ///     0x00,
-    ///     0x20,
-    ///     0x01,
-    ///     Rgb::new(255, 255, 255),
-    ///     0x00,
-    ///     Rgb::new(0, 0, 0),
-    /// ));
-    /// let _ = request;
-    /// ```
-    #[must_use]
-    pub fn with_options(mut self, options: TextOptions) -> Self {
-        self.options = options;
-        self
-    }
-
-    /// Overrides upload pacing behaviour.
-    ///
-    /// ```
-    /// use std::time::Duration;
-    ///
-    /// use idm::{TextUploadRequest, UploadPacing};
-    ///
-    /// let request = TextUploadRequest::new("Hi").with_pacing(UploadPacing::Delay {
-    ///     per_chunk: Duration::from_millis(25),
-    /// });
-    /// let _ = request;
-    /// ```
-    #[must_use]
-    pub fn with_pacing(mut self, pacing: UploadPacing) -> Self {
-        self.pacing = pacing;
-        self
     }
 }
 

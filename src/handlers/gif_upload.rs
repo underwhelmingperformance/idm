@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use bon::Builder;
 use crc32fast::hash;
 use idm_macros::progress;
 use thiserror::Error;
@@ -69,10 +70,12 @@ pub enum GifUploadError {
 }
 
 /// GIF upload request parameters.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Builder)]
 pub struct GifUploadRequest {
     gif: GifAnimation,
+    #[builder(default = DEFAULT_PER_FRAGMENT_DELAY)]
     per_fragment_delay: Duration,
+    #[builder(default = DEFAULT_NOTIFY_ACK_TIMEOUT)]
     ack_timeout: Duration,
 }
 
@@ -101,56 +104,6 @@ impl GifUploadRequest {
             per_fragment_delay: DEFAULT_PER_FRAGMENT_DELAY,
             ack_timeout: DEFAULT_NOTIFY_ACK_TIMEOUT,
         }
-    }
-
-    /// Overrides delay between transport fragments.
-    ///
-    /// ```
-    /// use std::time::Duration;
-    ///
-    /// use idm::{GifAnimation, GifUploadRequest};
-    ///
-    /// # fn tiny_gif() -> Vec<u8> {
-    /// #     vec![
-    /// #         0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00,
-    /// #         0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x21, 0xF9, 0x04, 0x01, 0x00,
-    /// #         0x00, 0x00, 0x00, 0x2C, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
-    /// #         0x00, 0x02, 0x02, 0x44, 0x01, 0x00, 0x3B,
-    /// #     ]
-    /// # }
-    /// let gif = GifAnimation::try_from(tiny_gif()).expect("test gif should decode");
-    /// let request = GifUploadRequest::new(gif).with_per_fragment_delay(Duration::ZERO);
-    /// assert_eq!(Duration::ZERO, request.per_fragment_delay());
-    /// ```
-    #[must_use]
-    pub fn with_per_fragment_delay(mut self, per_fragment_delay: Duration) -> Self {
-        self.per_fragment_delay = per_fragment_delay;
-        self
-    }
-
-    /// Overrides acknowledgement timeout per logical chunk.
-    ///
-    /// ```
-    /// use std::time::Duration;
-    ///
-    /// use idm::{GifAnimation, GifUploadRequest};
-    ///
-    /// # fn tiny_gif() -> Vec<u8> {
-    /// #     vec![
-    /// #         0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x01, 0x00, 0x01, 0x00, 0x80, 0x00,
-    /// #         0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0x21, 0xF9, 0x04, 0x01, 0x00,
-    /// #         0x00, 0x00, 0x00, 0x2C, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00,
-    /// #         0x00, 0x02, 0x02, 0x44, 0x01, 0x00, 0x3B,
-    /// #     ]
-    /// # }
-    /// let gif = GifAnimation::try_from(tiny_gif()).expect("test gif should decode");
-    /// let request = GifUploadRequest::new(gif).with_ack_timeout(Duration::from_millis(250));
-    /// assert_eq!(Duration::from_millis(250), request.ack_timeout());
-    /// ```
-    #[must_use]
-    pub fn with_ack_timeout(mut self, ack_timeout: Duration) -> Self {
-        self.ack_timeout = ack_timeout;
-        self
     }
 
     /// Returns the raw GIF payload bytes.

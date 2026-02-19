@@ -1,6 +1,7 @@
 use std::io;
 
 use anyhow::Result;
+use bon::Builder;
 use idm_macros::progress;
 use owo_colors::OwoColorize;
 use tracing::instrument;
@@ -38,8 +39,10 @@ pub fn fake_hardware_client(fake_args: FakeArgs) -> Box<dyn HardwareClient> {
 }
 
 /// Session-level app helper for acquiring an iDotMatrix connection.
+#[derive(Builder)]
 pub struct SessionHandler {
     hardware_client: Box<dyn HardwareClient>,
+    #[builder(default = DEFAULT_DEVICE_NAME_PREFIX.to_string())]
     name_prefix: String,
 }
 
@@ -50,6 +53,12 @@ impl SessionHandler {
     /// # async fn demo() -> anyhow::Result<()> {
     /// let handler = idm::SessionHandler::new(idm::real_hardware_client());
     /// let _ = handler;
+    ///
+    /// let custom_prefix = idm::SessionHandler::builder()
+    ///     .hardware_client(idm::real_hardware_client())
+    ///     .name_prefix("IDM_".to_string())
+    ///     .build();
+    /// let _ = custom_prefix;
     /// # Ok(())
     /// # }
     /// ```
@@ -59,22 +68,6 @@ impl SessionHandler {
             hardware_client,
             name_prefix: DEFAULT_DEVICE_NAME_PREFIX.to_string(),
         }
-    }
-
-    /// Overrides the BLE local-name prefix used when scanning for devices.
-    ///
-    /// ```
-    /// # async fn demo() -> anyhow::Result<()> {
-    /// let handler = idm::SessionHandler::new(idm::real_hardware_client())
-    ///     .with_name_prefix("IDM_");
-    /// let _ = handler;
-    /// # Ok(())
-    /// # }
-    /// ```
-    #[must_use]
-    pub fn with_name_prefix(mut self, name_prefix: impl Into<String>) -> Self {
-        self.name_prefix = name_prefix.into();
-        self
     }
 
     /// Connects to the first matching iDotMatrix peripheral.

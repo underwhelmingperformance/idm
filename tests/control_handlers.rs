@@ -26,7 +26,7 @@ fn image_request_64x64() -> anyhow::Result<idm::ImageUploadRequest> {
         payload.extend_from_slice(&[0x11, 0x22, 0x33]);
     }
     let frame = idm::Rgb888Frame::try_from((dimensions, payload))?;
-    Ok(idm::ImageUploadRequest::new(frame).with_per_fragment_delay(Duration::ZERO))
+    Ok(idm::ImageUploadRequest::new(frame))
 }
 
 fn stream_closed_listen_scenario() -> idm::ListenScenario {
@@ -115,9 +115,12 @@ async fn text_upload_handler_supports_notify_ack_pacing() -> anyhow::Result<()> 
     let client = idm::fake_hardware_client(fake_args);
     let session = client.connect_first_device("IDM-").await?;
 
-    let request = idm::TextUploadRequest::new("Hi").with_pacing(idm::UploadPacing::NotifyAck {
-        timeout: Duration::from_millis(250),
-    });
+    let request = idm::TextUploadRequest::builder()
+        .text("Hi".to_string())
+        .pacing(idm::UploadPacing::NotifyAck {
+            timeout: Duration::from_millis(250),
+        })
+        .build();
     let receipt = idm::TextUploadHandler::upload(&session, request).await?;
 
     assert_eq!(1, receipt.chunks_written());
@@ -161,7 +164,7 @@ async fn gif_upload_handler_reports_cache_hit_on_first_chunk_finish() -> anyhow:
     let mut payload_bytes = tiny_gif_payload();
     payload_bytes.extend(std::iter::repeat_n(0x00, 5000));
     let payload = idm::GifAnimation::try_from(payload_bytes)?;
-    let request = idm::GifUploadRequest::new(payload).with_per_fragment_delay(Duration::ZERO);
+    let request = idm::GifUploadRequest::new(payload);
     let receipt = idm::GifUploadHandler::upload(&session, request).await?;
 
     assert_eq!(true, receipt.cached());
@@ -186,8 +189,7 @@ async fn gif_upload_handler_surfaces_device_rejection_status() -> anyhow::Result
     let client = idm::fake_hardware_client(fake_args);
     let session = client.connect_first_device("IDM-").await?;
 
-    let request = idm::GifUploadRequest::new(idm::GifAnimation::try_from(tiny_gif_payload())?)
-        .with_per_fragment_delay(Duration::ZERO);
+    let request = idm::GifUploadRequest::new(idm::GifAnimation::try_from(tiny_gif_payload())?);
     let result = idm::GifUploadHandler::upload(&session, request).await;
 
     assert_matches!(
@@ -214,9 +216,7 @@ async fn text_upload_handler_times_out_when_ack_is_missing() -> anyhow::Result<(
     let client = idm::fake_hardware_client(fake_args);
     let session = client.connect_first_device("IDM-").await?;
 
-    let request = idm::TextUploadRequest::new("Hi").with_pacing(idm::UploadPacing::NotifyAck {
-        timeout: Duration::from_secs(5),
-    });
+    let request = idm::TextUploadRequest::new("Hi");
     let result = idm::TextUploadHandler::upload(&session, request).await;
 
     assert_matches!(
@@ -237,9 +237,12 @@ async fn text_upload_handler_surfaces_stream_closure_as_missing_ack() -> anyhow:
     let client = idm::fake_hardware_client(fake_args);
     let session = client.connect_first_device("IDM-").await?;
 
-    let request = idm::TextUploadRequest::new("Hi").with_pacing(idm::UploadPacing::NotifyAck {
-        timeout: Duration::from_millis(50),
-    });
+    let request = idm::TextUploadRequest::builder()
+        .text("Hi".to_string())
+        .pacing(idm::UploadPacing::NotifyAck {
+            timeout: Duration::from_millis(50),
+        })
+        .build();
     let result = idm::TextUploadHandler::upload(&session, request).await;
 
     assert_matches!(
@@ -264,9 +267,12 @@ async fn text_upload_handler_rejects_unexpected_ack_event() -> anyhow::Result<()
     let client = idm::fake_hardware_client(fake_args);
     let session = client.connect_first_device("IDM-").await?;
 
-    let request = idm::TextUploadRequest::new("Hi").with_pacing(idm::UploadPacing::NotifyAck {
-        timeout: Duration::from_millis(50),
-    });
+    let request = idm::TextUploadRequest::builder()
+        .text("Hi".to_string())
+        .pacing(idm::UploadPacing::NotifyAck {
+            timeout: Duration::from_millis(50),
+        })
+        .build();
     let result = idm::TextUploadHandler::upload(&session, request).await;
 
     assert_matches!(
@@ -293,9 +299,7 @@ async fn gif_upload_handler_times_out_when_ack_is_missing() -> anyhow::Result<()
     let client = idm::fake_hardware_client(fake_args);
     let session = client.connect_first_device("IDM-").await?;
 
-    let request = idm::GifUploadRequest::new(idm::GifAnimation::try_from(tiny_gif_payload())?)
-        .with_per_fragment_delay(Duration::ZERO)
-        .with_ack_timeout(Duration::from_secs(5));
+    let request = idm::GifUploadRequest::new(idm::GifAnimation::try_from(tiny_gif_payload())?);
     let result = idm::GifUploadHandler::upload(&session, request).await;
 
     assert_matches!(
@@ -316,8 +320,7 @@ async fn gif_upload_handler_surfaces_stream_closure_as_missing_ack() -> anyhow::
     let client = idm::fake_hardware_client(fake_args);
     let session = client.connect_first_device("IDM-").await?;
 
-    let request = idm::GifUploadRequest::new(idm::GifAnimation::try_from(tiny_gif_payload())?)
-        .with_per_fragment_delay(Duration::ZERO);
+    let request = idm::GifUploadRequest::new(idm::GifAnimation::try_from(tiny_gif_payload())?);
     let result = idm::GifUploadHandler::upload(&session, request).await;
 
     assert_matches!(
@@ -342,8 +345,7 @@ async fn gif_upload_handler_rejects_unexpected_ack_event() -> anyhow::Result<()>
     let client = idm::fake_hardware_client(fake_args);
     let session = client.connect_first_device("IDM-").await?;
 
-    let request = idm::GifUploadRequest::new(idm::GifAnimation::try_from(tiny_gif_payload())?)
-        .with_per_fragment_delay(Duration::ZERO);
+    let request = idm::GifUploadRequest::new(idm::GifAnimation::try_from(tiny_gif_payload())?);
     let result = idm::GifUploadHandler::upload(&session, request).await;
 
     assert_matches!(
@@ -370,7 +372,7 @@ async fn gif_upload_handler_surfaces_premature_finish_on_non_final_chunk() -> an
     let session = client.connect_first_device("IDM-").await?;
 
     let payload = idm::GifAnimation::try_from(gif_payload_with_padding(9000))?;
-    let request = idm::GifUploadRequest::new(payload).with_per_fragment_delay(Duration::ZERO);
+    let request = idm::GifUploadRequest::new(payload);
     let result = idm::GifUploadHandler::upload(&session, request).await;
 
     assert_matches!(
@@ -397,7 +399,7 @@ async fn gif_upload_handler_surfaces_non_final_chunk_rejection() -> anyhow::Resu
     let session = client.connect_first_device("IDM-").await?;
 
     let payload = idm::GifAnimation::try_from(gif_payload_with_padding(9000))?;
-    let request = idm::GifUploadRequest::new(payload).with_per_fragment_delay(Duration::ZERO);
+    let request = idm::GifUploadRequest::new(payload);
     let result = idm::GifUploadHandler::upload(&session, request).await;
 
     assert_matches!(
@@ -424,7 +426,7 @@ async fn gif_upload_handler_surfaces_last_chunk_rejection() -> anyhow::Result<()
     let session = client.connect_first_device("IDM-").await?;
 
     let payload = idm::GifAnimation::try_from(gif_payload_with_padding(5000))?;
-    let request = idm::GifUploadRequest::new(payload).with_per_fragment_delay(Duration::ZERO);
+    let request = idm::GifUploadRequest::new(payload);
     let result = idm::GifUploadHandler::upload(&session, request).await;
 
     assert_matches!(
@@ -451,8 +453,7 @@ async fn image_upload_handler_times_out_when_ack_is_missing() -> anyhow::Result<
     let client = idm::fake_hardware_client(fake_args);
     let session = client.connect_first_device("IDM-").await?;
 
-    let request = image_request_64x64()?.with_ack_timeout(Duration::from_secs(5));
-    let result = idm::ImageUploadHandler::upload(&session, request).await;
+    let result = idm::ImageUploadHandler::upload(&session, image_request_64x64()?).await;
 
     assert_matches!(
         result,

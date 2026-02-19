@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use bon::Builder;
 use crc32fast::hash;
 use idm_macros::progress;
 use thiserror::Error;
@@ -71,10 +72,12 @@ pub enum ImageUploadError {
 }
 
 /// Image upload request parameters.
-#[derive(Debug, Clone, Eq, PartialEq)]
+#[derive(Debug, Clone, Eq, PartialEq, Builder)]
 pub struct ImageUploadRequest {
     frame: Rgb888Frame,
+    #[builder(default = DEFAULT_PER_FRAGMENT_DELAY)]
     per_fragment_delay: Duration,
+    #[builder(default = DEFAULT_NOTIFY_ACK_TIMEOUT)]
     ack_timeout: Duration,
 }
 
@@ -97,44 +100,6 @@ impl ImageUploadRequest {
             per_fragment_delay: DEFAULT_PER_FRAGMENT_DELAY,
             ack_timeout: DEFAULT_NOTIFY_ACK_TIMEOUT,
         }
-    }
-
-    /// Overrides delay between transport fragments.
-    ///
-    /// ```
-    /// use std::time::Duration;
-    ///
-    /// use idm::{ImageUploadRequest, PanelDimensions, Rgb888Frame};
-    ///
-    /// let dimensions = PanelDimensions::new(1, 1).expect("1x1 should be valid");
-    /// let frame = Rgb888Frame::try_from((dimensions, vec![0x01, 0x02, 0x03]))
-    ///     .expect("1x1 frame should require 3 bytes");
-    /// let request = ImageUploadRequest::new(frame).with_per_fragment_delay(Duration::ZERO);
-    /// assert_eq!(Duration::ZERO, request.per_fragment_delay());
-    /// ```
-    #[must_use]
-    pub fn with_per_fragment_delay(mut self, per_fragment_delay: Duration) -> Self {
-        self.per_fragment_delay = per_fragment_delay;
-        self
-    }
-
-    /// Overrides acknowledgement timeout per logical chunk.
-    ///
-    /// ```
-    /// use std::time::Duration;
-    ///
-    /// use idm::{ImageUploadRequest, PanelDimensions, Rgb888Frame};
-    ///
-    /// let dimensions = PanelDimensions::new(1, 1).expect("1x1 should be valid");
-    /// let frame = Rgb888Frame::try_from((dimensions, vec![0x01, 0x02, 0x03]))
-    ///     .expect("1x1 frame should require 3 bytes");
-    /// let request = ImageUploadRequest::new(frame).with_ack_timeout(Duration::from_millis(250));
-    /// assert_eq!(Duration::from_millis(250), request.ack_timeout());
-    /// ```
-    #[must_use]
-    pub fn with_ack_timeout(mut self, ack_timeout: Duration) -> Self {
-        self.ack_timeout = ack_timeout;
-        self
     }
 
     /// Returns the raw image payload bytes.
