@@ -256,13 +256,13 @@ impl TextUploadHandler {
             None
         };
 
-        let mut transport_chunks_total = 0usize;
+        let transport_chunks_total: usize = frame_blocks
+            .iter()
+            .map(|block| block.len().div_ceil(chunk_size))
+            .sum();
+        progress_set_length!(transport_chunks_total);
 
         for block in &frame_blocks {
-            let block_transport_chunks = block.len().div_ceil(chunk_size);
-            transport_chunks_total += block_transport_chunks;
-            progress_inc_length!(block_transport_chunks);
-
             for transport_chunk in block.chunks(chunk_size) {
                 session
                     .write_endpoint(

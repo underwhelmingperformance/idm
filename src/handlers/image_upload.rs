@@ -25,6 +25,7 @@ const DEFAULT_NOTIFY_ACK_TIMEOUT: Duration = Duration::from_secs(5);
 const DRAIN_NOTIFICATION_TIMEOUT: Duration = Duration::from_millis(25);
 const MAX_STALE_NOTIFICATION_DRAIN: usize = 8;
 const UNUSABLE_WRITE_WITHOUT_RESPONSE_LIMIT: usize = 20;
+const MEDIA_HEADER_LEN: usize = 16;
 
 /// Errors returned by image upload operations.
 #[derive(Debug, Error)]
@@ -318,7 +319,11 @@ impl ImageUploadHandler {
         let mut bytes_written = 0usize;
         let mut chunks_written = 0usize;
         let mut logical_chunks_sent = 0usize;
-        let mut transport_chunks_total = 0usize;
+        let transport_chunks_total: usize = payload
+            .chunks(LOGICAL_CHUNK_SIZE)
+            .map(|logical_chunk| (MEDIA_HEADER_LEN + logical_chunk.len()).div_ceil(chunk_size))
+            .sum();
+        progress_set_length!(transport_chunks_total);
 
         for (index, logical_chunk) in payload.chunks(LOGICAL_CHUNK_SIZE).enumerate() {
             let chunk_flag = if index == 0 {
@@ -341,9 +346,6 @@ impl ImageUploadHandler {
             frame_block.extend_from_slice(&header);
             frame_block.extend_from_slice(logical_chunk);
             logical_chunks_sent += 1;
-            let block_transport_chunks = frame_block.len().div_ceil(chunk_size);
-            transport_chunks_total += block_transport_chunks;
-            progress_inc_length!(block_transport_chunks);
 
             for transport_chunk in frame_block.chunks(chunk_size) {
                 session
