@@ -3,6 +3,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use async_trait::async_trait;
+use tokio::time::timeout;
 use tokio_stream::Stream;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, instrument, trace};
@@ -17,6 +18,8 @@ use super::profile::DeviceProfile;
 use crate::error::InteractionError;
 use crate::notification::{NotificationDecodeError, NotificationHandler, NotifyEvent};
 use crate::protocol::EndpointId;
+
+const SESSION_CLOSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Creates a hardware client backed by the real BLE transport.
 pub(crate) fn real_hardware_client() -> Box<dyn HardwareClient> {
@@ -508,14 +511,24 @@ impl DeviceSession {
     /// Returns an error if teardown fails.
     #[instrument(skip(self), level = "debug")]
     pub async fn close(self) -> Result<(), InteractionError> {
-        self.session.close().await
+        match timeout(SESSION_CLOSE_TIMEOUT, self.session.close()).await {
+            Ok(result) => result,
+            Err(_elapsed) => {
+                let timeout_ms =
+                    u64::try_from(SESSION_CLOSE_TIMEOUT.as_millis()).unwrap_or(u64::MAX);
+                Err(InteractionError::SessionCloseTimeout { timeout_ms })
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
+    use std::future::pending;
+    use std::sync::Arc;
 
+    use async_trait::async_trait;
     use pretty_assertions::assert_eq;
     use rstest::rstest;
 
@@ -557,5 +570,92 @@ mod tests {
     ) {
         let missing = missing_required_endpoints(&presence);
         assert_eq!(expected, missing);
+    }
+
+    struct HangingCloseSession {
+        device: FoundDevice,
+    }
+
+    #[async_trait]
+    impl ConnectedBleSession for HangingCloseSession {
+        fn device(&self) -> &FoundDevice {
+            &self.device
+        }
+
+        fn inspect_report(&self) -> InspectReport {
+            panic!("inspect_report should not be called in this test");
+        }
+
+        fn write_without_response_limit(&self) -> Option<usize> {
+            None
+        }
+
+        fn device_profile(&self) -> DeviceProfile {
+            panic!("device_profile should not be called in this test");
+        }
+
+        async fn read_endpoint(&self, _endpoint: EndpointId) -> Result<Vec<u8>, InteractionError> {
+            panic!("read_endpoint should not be called in this test");
+        }
+
+        async fn read_endpoint_optional(
+            &self,
+            _endpoint: EndpointId,
+        ) -> Result<Option<Vec<u8>>, InteractionError> {
+            panic!("read_endpoint_optional should not be called in this test");
+        }
+
+        async fn write_endpoint(
+            &self,
+            _endpoint: EndpointId,
+            _payload: &[u8],
+            _mode: WriteMode,
+        ) -> Result<(), InteractionError> {
+            panic!("write_endpoint should not be called in this test");
+        }
+
+        async fn subscribe_endpoint(&self, _endpoint: EndpointId) -> Result<(), InteractionError> {
+            panic!("subscribe_endpoint should not be called in this test");
+        }
+
+        async fn unsubscribe_endpoint(
+            &self,
+            _endpoint: EndpointId,
+        ) -> Result<(), InteractionError> {
+            panic!("unsubscribe_endpoint should not be called in this test");
+        }
+
+        async fn notification_payloads(
+            &self,
+            _endpoint: EndpointId,
+        ) -> Result<PayloadStream, InteractionError> {
+            panic!("notification_payloads should not be called in this test");
+        }
+
+        async fn close(self: Arc<Self>) -> Result<(), InteractionError> {
+            pending::<Result<(), InteractionError>>().await
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn close_times_out_when_backend_close_stalls() {
+        let session = DeviceSession {
+            session: Arc::new(HangingCloseSession {
+                device: FoundDevice::new(
+                    "hci0".to_string(),
+                    "aa:bb:cc".to_string(),
+                    Some("IDM-Test".to_string()),
+                    Some(-42),
+                ),
+            }),
+        };
+
+        let result = session.close().await;
+        match result {
+            Err(InteractionError::SessionCloseTimeout { timeout_ms }) => {
+                assert_eq!(3_000, timeout_ms);
+            }
+            other => panic!("expected SessionCloseTimeout, got {other:?}"),
+        }
     }
 }

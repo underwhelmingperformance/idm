@@ -1,14 +1,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
 use btleplug::api::{
-    Central, CharPropFlags, Characteristic, Manager as _, Peripheral as _, PeripheralProperties,
-    ScanFilter, WriteType,
+    Central, CentralEvent, CharPropFlags, Characteristic, Manager as _, Peripheral as _,
+    PeripheralProperties, ScanFilter, WriteType,
 };
 use btleplug::platform::{Adapter, Manager, Peripheral};
 use time::OffsetDateTime;
+use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout};
 use tokio_stream::StreamExt;
 use tracing::{debug, info, instrument, trace};
@@ -35,6 +38,43 @@ const GET_LED_INFO_QUERY: [u8; 4] = [0x04, 0x00, 0x01, 0x80];
 const READ_SCREEN_LIGHT_TIMEOUT_QUERY: [u8; 5] = [0x05, 0x00, 0x0F, 0x80, 0xFF];
 const CONNECT_LOCAL_ABORT_MAX_ATTEMPTS: usize = 3;
 const CONNECT_LOCAL_ABORT_BASE_BACKOFF_MS: u64 = 150;
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[repr(u8)]
+enum ConnectionState {
+    Unknown = 0,
+    Connected = 1,
+    Disconnected = 2,
+}
+
+#[derive(Debug)]
+struct ConnectionStateCell {
+    state: AtomicU8,
+}
+
+impl ConnectionStateCell {
+    fn new(state: ConnectionState) -> Self {
+        Self {
+            state: AtomicU8::new(Self::encode(state)),
+        }
+    }
+
+    fn get(&self) -> ConnectionState {
+        match self.state.load(Ordering::Relaxed) {
+            1 => ConnectionState::Connected,
+            2 => ConnectionState::Disconnected,
+            _ => ConnectionState::Unknown,
+        }
+    }
+
+    fn set(&self, state: ConnectionState) {
+        self.state.store(Self::encode(state), Ordering::Relaxed);
+    }
+
+    const fn encode(state: ConnectionState) -> u8 {
+        state as u8
+    }
+}
 
 #[derive(Debug)]
 struct LedInfoQueryResult {
@@ -230,6 +270,7 @@ impl BtleplugBackend {
                         "connected to matching peripheral"
                     );
                     return Ok(ConnectedPeripheral {
+                        adapter: adapter.adapter.clone(),
                         peripheral,
                         device,
                         scan_properties_debug,
@@ -263,6 +304,38 @@ impl BtleplugBackend {
         name_prefix: &str,
     ) -> Result<RealDeviceSession, InteractionError> {
         let connected = self.find_and_connect_first_matching(name_prefix).await?;
+        let connection_state = Arc::new(ConnectionStateCell::new(ConnectionState::Connected));
+        let disconnect_watcher = match connected.adapter.events().await {
+            Ok(mut events) => {
+                let target_peripheral_id = connected.peripheral.id();
+                let connection_state = Arc::clone(&connection_state);
+                Some(tokio::spawn(async move {
+                    while let Some(event) = events.next().await {
+                        match event {
+                            CentralEvent::DeviceDisconnected(peripheral_id)
+                                if peripheral_id == target_peripheral_id =>
+                            {
+                                connection_state.set(ConnectionState::Disconnected);
+                            }
+                            CentralEvent::DeviceConnected(peripheral_id)
+                                if peripheral_id == target_peripheral_id =>
+                            {
+                                connection_state.set(ConnectionState::Connected);
+                            }
+                            _ => {}
+                        }
+                    }
+                }))
+            }
+            Err(error) => {
+                debug!(
+                    ?error,
+                    "failed to subscribe to adapter events for connection-state tracking"
+                );
+                None
+            }
+        };
+
         let (services, characteristics_by_uuid) =
             collect_services_and_characteristics(&connected.peripheral);
         let negotiated_endpoints = negotiate_session_endpoints(&services)?;
@@ -359,6 +432,8 @@ impl BtleplugBackend {
             session_metadata,
             characteristics_by_endpoint,
             peripheral: connected.peripheral,
+            connection_state,
+            disconnect_watcher: Mutex::new(disconnect_watcher),
         })
     }
 }
@@ -1227,6 +1302,8 @@ pub(crate) struct RealDeviceSession {
     session_metadata: SessionMetadata,
     characteristics_by_endpoint: HashMap<EndpointId, Characteristic>,
     peripheral: Peripheral,
+    connection_state: Arc<ConnectionStateCell>,
+    disconnect_watcher: Mutex<Option<JoinHandle<()>>>,
 }
 
 impl RealDeviceSession {
@@ -1237,6 +1314,14 @@ impl RealDeviceSession {
         self.characteristics_by_endpoint
             .get(&endpoint)
             .ok_or(InteractionError::MissingEndpoint { endpoint })
+    }
+
+    fn stop_disconnect_watcher(&self) {
+        if let Ok(mut disconnect_watcher) = self.disconnect_watcher.lock()
+            && let Some(handle) = disconnect_watcher.take()
+        {
+            handle.abort();
+        }
     }
 }
 
@@ -1331,10 +1416,32 @@ impl ConnectedBleSession for RealDeviceSession {
 
     #[instrument(skip(self), level = "debug")]
     async fn close(self: Arc<Self>) -> Result<(), InteractionError> {
+        if self.connection_state.get() == ConnectionState::Disconnected {
+            trace!(
+                "skipping explicit disconnect because connection is already marked disconnected"
+            );
+            self.stop_disconnect_watcher();
+            return Ok(());
+        }
+
         if self.peripheral.is_connected().await? {
             self.peripheral.disconnect().await?;
+            self.connection_state.set(ConnectionState::Disconnected);
+        } else {
+            self.connection_state.set(ConnectionState::Disconnected);
         }
+        self.stop_disconnect_watcher();
         Ok(())
+    }
+}
+
+impl Drop for RealDeviceSession {
+    fn drop(&mut self) {
+        if let Ok(mut disconnect_watcher) = self.disconnect_watcher.lock()
+            && let Some(handle) = disconnect_watcher.take()
+        {
+            handle.abort();
+        }
     }
 }
 
@@ -1346,6 +1453,7 @@ struct AdapterHandle {
 
 #[derive(Debug)]
 struct ConnectedPeripheral {
+    adapter: Adapter,
     peripheral: Peripheral,
     device: FoundDevice,
     scan_properties_debug: ScanPropertiesDebug,

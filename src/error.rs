@@ -39,6 +39,8 @@ pub enum InteractionError {
         "notification stream has not completed yet; drain the stream before requesting a summary"
     )]
     NotificationStreamIncomplete,
+    #[error("session close timed out after {timeout_ms}ms")]
+    SessionCloseTimeout { timeout_ms: u64 },
     #[error(transparent)]
     Fixture(#[from] FixtureError),
 }
