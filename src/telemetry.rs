@@ -19,6 +19,7 @@ use crate::cli::OutputFormat;
 use crate::error::TelemetryError;
 
 static TRACING_INITIALISED: OnceLock<Result<(), TelemetryError>> = OnceLock::new();
+const PROGRESS_TEMPLATE: &str = "{spinner:.cyan.bold} {msg}";
 
 /// Initialises structured logging and OpenTelemetry tracing support.
 ///
@@ -96,7 +97,7 @@ fn configured_log_filter(log_level_override: Option<LevelFilter>) -> EnvFilter {
 }
 
 fn progress_style() -> ProgressStyle {
-    ProgressStyle::with_template("{spinner:.cyan.bold} {msg}")
+    ProgressStyle::with_template(PROGRESS_TEMPLATE)
         .unwrap_or_else(|_error| ProgressStyle::default_spinner())
 }
 
@@ -109,4 +110,21 @@ fn progress_tick_settings() -> TickSettings {
 
 fn progress_span_filter(metadata: &Metadata<'_>) -> bool {
     metadata.is_span() && metadata.fields().field("progress").is_some()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn progress_template_supports_spinner_rendering() {
+        assert!(
+            PROGRESS_TEMPLATE.contains("{spinner"),
+            "progress template should contain a spinner placeholder"
+        );
+        assert!(
+            ProgressStyle::with_template(PROGRESS_TEMPLATE).is_ok(),
+            "progress template must be accepted by indicatif"
+        );
+    }
 }

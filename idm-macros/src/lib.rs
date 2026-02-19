@@ -40,6 +40,10 @@ pub fn derive_has_diagnostics(input: TokenStream) -> TokenStream {
 /// - `progress_trace!(<completed>, <total>)`
 ///
 /// Progress-bar length is initialised to `0` when the function starts.
+/// The macro applies a per-span bar template only when it detects
+/// `progress_set_length!`, `progress_inc_length!`, or `progress_inc!` in the
+/// body. Otherwise, span rendering falls back to the global spinner-style
+/// template.
 ///
 /// ```ignore
 /// #[progress(

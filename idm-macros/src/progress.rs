@@ -1,8 +1,8 @@
 use proc_macro::TokenStream;
 use proc_macro2::TokenTree;
 use quote::quote;
-use syn::spanned::Spanned;
 use syn::ItemFn;
+use syn::spanned::Spanned;
 
 struct ProgressAttrs {
     message: syn::Expr,
@@ -85,6 +85,8 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
     let uses_progress_inc_length = contains_macro_call(&original_stmts, "progress_inc_length");
     let uses_progress_inc = contains_macro_call(&original_stmts, "progress_inc");
     let uses_progress_trace = contains_macro_call(&original_stmts, "progress_trace");
+    let uses_progress_bar_style =
+        uses_progress_set_length || uses_progress_inc_length || uses_progress_inc;
     let body_eval = if func.sig.asyncness.is_some() {
         quote!((async { #(#original_stmts)* }).await)
     } else {
@@ -154,10 +156,22 @@ pub fn expand(attr: TokenStream, item: TokenStream) -> TokenStream {
     } else {
         quote! {}
     };
+    let progress_set_style = if uses_progress_bar_style {
+        quote! {
+            if let Ok(style) = tracing_indicatif::style::ProgressStyle::with_template(
+                "{spinner:.cyan.bold} {msg} [{wide_bar:.cyan/blue}] {pos}/{len}"
+            ) {
+                __progress_span.pb_set_style(&style);
+            }
+        }
+    } else {
+        quote! {}
+    };
 
     func.block = syn::parse_quote!({
         use tracing_indicatif::span_ext::IndicatifSpanExt as _;
         let __progress_span = tracing::Span::current();
+        #progress_set_style
         __progress_span.pb_set_message(#message);
         __progress_span.pb_set_length(0);
         #progress_set_length_macro
