@@ -19,19 +19,31 @@ use crate::hw::{
 #[command(name = "idm", about = "Interact with iDotMatrix BLE devices.")]
 pub struct Args {
     /// Uses the fake BLE backend with fixture-driven discovery and payloads.
-    #[arg(long, global = true)]
+    #[arg(long, global = true, hide = true)]
     fake: bool,
     /// Fake scan fixtures in the form `adapter|device_id|local_name|rssi;...`.
-    #[arg(long, global = true, requires = "fake", required_if_eq("fake", "true"))]
+    #[arg(
+        long,
+        global = true,
+        requires = "fake",
+        required_if_eq("fake", "true"),
+        hide = true
+    )]
     fake_scan: Option<ScanFixture>,
     /// Fake `fa03` initial read payload as hexadecimal bytes.
-    #[arg(long, global = true, requires = "fake")]
+    #[arg(long, global = true, requires = "fake", hide = true)]
     fake_read: Option<HexPayload>,
     /// Fake notification payloads as comma-separated hexadecimal payloads.
-    #[arg(long, global = true, requires = "fake")]
+    #[arg(long, global = true, requires = "fake", hide = true)]
     fake_notifications: Option<NotificationPayloads>,
     /// Artificial fake scan delay (e.g. `250ms`, `2s`).
-    #[arg(long, global = true, requires = "fake", value_parser = parse_duration)]
+    #[arg(
+        long,
+        global = true,
+        requires = "fake",
+        value_parser = parse_duration,
+        hide = true
+    )]
     fake_discovery_delay: Option<Duration>,
     /// Explicit LED type override used to resolve ambiguous scan shapes.
     #[arg(long, global = true, value_parser = parse_led_type)]
