@@ -287,10 +287,18 @@ impl TextUploadHandler {
 
 fn write_chunk_size(session: &DeviceSession) -> Result<usize, ProtocolError> {
     let fallback = session.device_profile().write_without_response_fallback();
-    let chunk_size = match session.write_without_response_limit() {
+    let reported_limit = session.write_without_response_limit();
+    let chunk_size = match reported_limit {
         Some(limit) if limit > UNUSABLE_WRITE_WITHOUT_RESPONSE_LIMIT => limit,
         _ => fallback,
     };
+    tracing::trace!(
+        write_without_response_limit = reported_limit,
+        fallback_chunk = fallback,
+        selected_chunk_size = chunk_size,
+        using_fallback = chunk_size == fallback,
+        "resolved text upload chunk size"
+    );
     if chunk_size == 0 {
         return Err(TextUploadError::InvalidChunkSize.into());
     }

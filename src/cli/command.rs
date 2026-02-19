@@ -425,4 +425,13 @@ mod tests {
 
         assert_eq!(Some(LogLevel::Trace), cli.log_level());
     }
+
+    #[test]
+    fn image_command_parses_path_argument() {
+        let cli = Args::try_parse_from(["idm", "image", "photo.jpg"])
+            .expect("image command should parse");
+
+        let Args { command, .. } = cli;
+        assert_matches!(command, Command::Image(_));
+    }
 }

@@ -10,7 +10,7 @@ use crate::cli::OutputFormat;
 use crate::hw::HardwareClient;
 use crate::{
     GifUploadHandler, GifUploadRequest, ImagePreprocessor, ImageUploadHandler, ImageUploadRequest,
-    PreparedImageUpload, SessionHandler,
+    MediaHeaderTail, PreparedImageUpload, SessionHandler,
 };
 
 /// JSON result emitted by `image` command.
@@ -112,12 +112,13 @@ where
         .with_context(|| format!("failed to read image file `{}`", args.path().display()))?;
     let prepared = ImagePreprocessor::prepare_for_upload(&source_bytes, panel_dimensions)
         .with_context(|| format!("failed to prepare image file `{}`", args.path().display()))?;
+    let media_header_tail = MediaHeaderTail::NoTimeSignature;
 
     match prepared {
         PreparedImageUpload::Still(still) => {
-            let receipt =
-                ImageUploadHandler::upload(session, ImageUploadRequest::new(still.into_frame()))
-                    .await?;
+            let request = ImageUploadRequest::new(still.into_frame())
+                .with_media_header_tail(media_header_tail);
+            let receipt = ImageUploadHandler::upload(session, request).await?;
             match output_format {
                 OutputFormat::Pretty => {}
                 OutputFormat::Json => {
@@ -134,7 +135,8 @@ where
             }
         }
         PreparedImageUpload::Gif(gif) => {
-            let receipt = GifUploadHandler::upload(session, GifUploadRequest::new(gif)).await?;
+            let request = GifUploadRequest::new(gif).with_media_header_tail(media_header_tail);
+            let receipt = GifUploadHandler::upload(session, request).await?;
             match output_format {
                 OutputFormat::Pretty => {}
                 OutputFormat::Json => {

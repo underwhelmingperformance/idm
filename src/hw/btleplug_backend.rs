@@ -308,9 +308,20 @@ impl BtleplugBackend {
             &self.model_resolution,
         )?;
 
+        let negotiated_att_mtu = negotiated_att_mtu();
         let write_without_response_limit = characteristics_by_endpoint
             .get(&EndpointId::WriteCharacteristic)
-            .and_then(|characteristic| negotiated_transport_write_limit(characteristic.properties));
+            .and_then(|characteristic| {
+                negotiated_transport_write_limit(characteristic.properties, negotiated_att_mtu)
+            });
+        trace!(
+            actual_mtu = negotiated_att_mtu,
+            write_without_response_limit,
+            using_fallback =
+                write_without_response_limit == Some(protocol::TRANSPORT_CHUNK_FALLBACK),
+            fallback_transport_chunk = protocol::TRANSPORT_CHUNK_FALLBACK,
+            "resolved session write-without-response limit"
+        );
         let device_profile = resolve_device_profile(
             &connected.device,
             &services,
@@ -364,9 +375,7 @@ fn is_local_abort_error(error: &btleplug::Error) -> bool {
 
 fn local_abort_backoff(attempt: usize) -> Duration {
     let multiplier = u32::try_from(attempt).unwrap_or(u32::MAX);
-    Duration::from_millis(
-        CONNECT_LOCAL_ABORT_BASE_BACKOFF_MS.saturating_mul(u64::from(multiplier)),
-    )
+    Duration::from_millis(CONNECT_LOCAL_ABORT_BASE_BACKOFF_MS.saturating_mul(u64::from(multiplier)))
 }
 
 #[instrument(skip(peripheral), level = "trace")]
@@ -378,8 +387,8 @@ async fn connect_and_discover_services_with_retry(
             match peripheral.connect().await {
                 Ok(()) => {}
                 Err(error) => {
-                    let can_retry = is_local_abort_error(&error)
-                        && attempt < CONNECT_LOCAL_ABORT_MAX_ATTEMPTS;
+                    let can_retry =
+                        is_local_abort_error(&error) && attempt < CONNECT_LOCAL_ABORT_MAX_ATTEMPTS;
                     if !can_retry {
                         return Err(error.into());
                     }
@@ -1149,20 +1158,55 @@ fn write_types_for_characteristic(properties: CharPropFlags) -> Vec<WriteType> {
     write_types
 }
 
-fn negotiated_transport_write_limit(properties: CharPropFlags) -> Option<usize> {
+fn negotiated_att_mtu() -> Option<usize> {
+    let actual_mtu: Option<usize> = None;
+    trace!(
+        requested_mtu = protocol::REQUESTED_ATT_MTU,
+        actual_mtu = actual_mtu,
+        fallback_transport_chunk = protocol::TRANSPORT_CHUNK_FALLBACK,
+        "ATT MTU negotiation is unavailable in the current btleplug API"
+    );
+    actual_mtu
+}
+
+fn negotiated_transport_write_limit(
+    properties: CharPropFlags,
+    negotiated_att_mtu: Option<usize>,
+) -> Option<usize> {
     if properties.contains(CharPropFlags::WRITE_WITHOUT_RESPONSE) {
-        let write_limit = if protocol::REQUESTED_ATT_MTU >= protocol::MTU_READY_THRESHOLD {
+        let mtu_ready =
+            negotiated_att_mtu.is_some_and(|value| value >= protocol::MTU_READY_THRESHOLD);
+        let write_limit = if mtu_ready {
             protocol::TRANSPORT_CHUNK_MTU_READY
         } else {
             protocol::TRANSPORT_CHUNK_FALLBACK
         };
+        trace!(
+            actual_mtu = negotiated_att_mtu,
+            mtu_ready,
+            fallback_chunk = protocol::TRANSPORT_CHUNK_FALLBACK,
+            transport_chunk = write_limit,
+            using_fallback = !mtu_ready,
+            "resolved write-without-response transport chunk size"
+        );
         return Some(write_limit);
     }
 
     if properties.contains(CharPropFlags::WRITE) {
+        trace!(
+            actual_mtu = negotiated_att_mtu,
+            fallback_chunk = protocol::TRANSPORT_CHUNK_FALLBACK,
+            transport_chunk = protocol::TRANSPORT_CHUNK_FALLBACK,
+            using_fallback = true,
+            "resolved write transport chunk size from write-with-response capability"
+        );
         return Some(protocol::TRANSPORT_CHUNK_FALLBACK);
     }
 
+    trace!(
+        actual_mtu = negotiated_att_mtu,
+        "write transport chunk size unavailable because characteristic is not writable"
+    );
     None
 }
 
@@ -1452,19 +1496,36 @@ mod tests {
     #[rstest]
     #[case(
         CharPropFlags::WRITE_WITHOUT_RESPONSE,
+        Some(protocol::MTU_READY_THRESHOLD),
         Some(protocol::TRANSPORT_CHUNK_MTU_READY)
     )]
-    #[case(CharPropFlags::WRITE, Some(protocol::TRANSPORT_CHUNK_FALLBACK))]
     #[case(
         CharPropFlags::WRITE_WITHOUT_RESPONSE | CharPropFlags::WRITE,
+        Some(protocol::MTU_READY_THRESHOLD),
         Some(protocol::TRANSPORT_CHUNK_MTU_READY)
     )]
-    #[case(CharPropFlags::READ, None)]
+    #[case(
+        CharPropFlags::WRITE_WITHOUT_RESPONSE,
+        Some(protocol::MTU_READY_THRESHOLD - 1),
+        Some(protocol::TRANSPORT_CHUNK_FALLBACK)
+    )]
+    #[case(
+        CharPropFlags::WRITE_WITHOUT_RESPONSE,
+        None,
+        Some(protocol::TRANSPORT_CHUNK_FALLBACK)
+    )]
+    #[case(
+        CharPropFlags::WRITE,
+        Some(protocol::MTU_READY_THRESHOLD),
+        Some(protocol::TRANSPORT_CHUNK_FALLBACK)
+    )]
+    #[case(CharPropFlags::READ, Some(protocol::MTU_READY_THRESHOLD), None)]
     fn negotiated_transport_write_limit_resolves_expected_values(
         #[case] properties: CharPropFlags,
+        #[case] negotiated_att_mtu: Option<usize>,
         #[case] expected: Option<usize>,
     ) {
-        let resolved = negotiated_transport_write_limit(properties);
+        let resolved = negotiated_transport_write_limit(properties, negotiated_att_mtu);
         assert_eq!(expected, resolved);
     }
 
@@ -1550,10 +1611,7 @@ mod tests {
     #[case("org.bluez.Error.Failed le-connection-abort-by-local", true)]
     #[case("org.bluez.Error.Failed LE-CONNECTION-ABORT-BY-LOCAL", true)]
     #[case("org.bluez.Error.Failed Connection was aborted", false)]
-    fn is_local_abort_message_matches_expected(
-        #[case] message: &str,
-        #[case] expected: bool,
-    ) {
+    fn is_local_abort_message_matches_expected(#[case] message: &str, #[case] expected: bool) {
         assert_eq!(expected, is_local_abort_message(message));
     }
 

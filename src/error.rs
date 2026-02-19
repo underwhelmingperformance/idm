@@ -3,6 +3,7 @@ use thiserror::Error;
 
 use crate::handlers::{
     BrightnessError, FrameCodecError, GifUploadError, ImageUploadError, TextUploadError,
+    UploadAckError,
 };
 use crate::notification::NotificationDecodeError;
 use crate::protocol::{EndpointId, endpoint_metadata};
@@ -96,6 +97,9 @@ pub enum ProtocolError {
     #[error(transparent)]
     #[from(ImageUploadError, Box<ImageUploadError>)]
     ImageUpload(Box<ImageUploadError>),
+    #[error(transparent)]
+    #[from(UploadAckError, Box<UploadAckError>)]
+    UploadAck(Box<UploadAckError>),
     #[error(transparent)]
     #[from(InteractionError, Box<InteractionError>)]
     Interaction(Box<InteractionError>),

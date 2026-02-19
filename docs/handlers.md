@@ -347,7 +347,13 @@ Behaviour:
 - Use notification-driven flow control.
 - Default transport pacing uses `20 ms` per transport fragment; callers may
   override the delay.
+- Transport chunk sizing uses adaptive probing: start from MTU-ready size
+  (`509`) when session metadata only has fallback, then halve on write failure
+  until success, floored at `18`.
 - Drain stale notify events before upload to reduce cross-command ACK bleed.
+- After a successful `finish` ACK (including cache-hit completion), keep the
+  session alive for `500 ms` before returning so the panel can apply the
+  material switch.
 - Consume typed notification events from the session API rather than decoding
   raw notify payload bytes in handler code.
 - CLI wired via top-level `idm image <image_file>` using device-profile-aware
@@ -379,6 +385,9 @@ Behaviour:
 - Reuse chunker and flow-control primitives from GIF handler.
 - Default transport pacing uses `20 ms` per transport fragment; callers may
   override the delay.
+- Transport chunk sizing uses adaptive probing: start from MTU-ready size
+  (`509`) when session metadata only has fallback, then halve on write failure
+  until success, floored at `18`.
 - Consume typed notification events from the session API rather than decoding
   raw notify payload bytes in handler code.
 - CLI wired via top-level `idm image <image_file>` using device-profile-aware
@@ -387,7 +396,7 @@ Behaviour:
 ## Material Bank Sync Handler (Slideshow)
 
 Status: `TODO`  
-Priority: `P1`  
+Priority: `P1`
 
 Protocol references:
 
