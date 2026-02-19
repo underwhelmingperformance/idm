@@ -41,7 +41,11 @@ async fn main() -> ExitCode {
     match run_result {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
-            eprintln!("error: {error:#}");
+            if tracing::dispatcher::has_been_set() {
+                tracing::error!(error = %format_args!("{error:#}"), "command failed");
+            } else {
+                eprintln!("error: {error:#}");
+            }
             ExitCode::from(1)
         }
     }
