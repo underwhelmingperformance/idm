@@ -33,6 +33,8 @@ use crate::protocol::{self, EndpointId};
 const LED_INFO_QUERY_TIMEOUT_MS: u64 = 1_000;
 const GET_LED_INFO_QUERY: [u8; 4] = [0x04, 0x00, 0x01, 0x80];
 const READ_SCREEN_LIGHT_TIMEOUT_QUERY: [u8; 5] = [0x05, 0x00, 0x0F, 0x80, 0xFF];
+const CONNECT_LOCAL_ABORT_MAX_ATTEMPTS: usize = 3;
+const CONNECT_LOCAL_ABORT_BASE_BACKOFF_MS: u64 = 150;
 
 #[derive(Debug)]
 struct LedInfoQueryResult {
@@ -208,10 +210,7 @@ impl BtleplugBackend {
                         }
                     }
 
-                    if !peripheral.is_connected().await? {
-                        peripheral.connect().await?;
-                    }
-                    peripheral.discover_services().await?;
+                    connect_and_discover_services_with_retry(&peripheral).await?;
 
                     let device = FoundDevice::new(
                         adapter.name.clone(),
@@ -351,6 +350,76 @@ impl BtleplugBackend {
             peripheral: connected.peripheral,
         })
     }
+}
+
+fn is_local_abort_message(message: &str) -> bool {
+    message
+        .to_ascii_lowercase()
+        .contains("le-connection-abort-by-local")
+}
+
+fn is_local_abort_error(error: &btleplug::Error) -> bool {
+    is_local_abort_message(&error.to_string())
+}
+
+fn local_abort_backoff(attempt: usize) -> Duration {
+    let multiplier = u32::try_from(attempt).unwrap_or(u32::MAX);
+    Duration::from_millis(
+        CONNECT_LOCAL_ABORT_BASE_BACKOFF_MS.saturating_mul(u64::from(multiplier)),
+    )
+}
+
+#[instrument(skip(peripheral), level = "trace")]
+async fn connect_and_discover_services_with_retry(
+    peripheral: &Peripheral,
+) -> Result<(), InteractionError> {
+    for attempt in 1..=CONNECT_LOCAL_ABORT_MAX_ATTEMPTS {
+        if !peripheral.is_connected().await? {
+            match peripheral.connect().await {
+                Ok(()) => {}
+                Err(error) => {
+                    let can_retry = is_local_abort_error(&error)
+                        && attempt < CONNECT_LOCAL_ABORT_MAX_ATTEMPTS;
+                    if !can_retry {
+                        return Err(error.into());
+                    }
+
+                    debug!(
+                        ?error,
+                        attempt,
+                        max_attempts = CONNECT_LOCAL_ABORT_MAX_ATTEMPTS,
+                        "connect failed with local abort; retrying"
+                    );
+                    sleep(local_abort_backoff(attempt)).await;
+                    continue;
+                }
+            }
+        }
+
+        match peripheral.discover_services().await {
+            Ok(()) => return Ok(()),
+            Err(error) => {
+                let can_retry =
+                    is_local_abort_error(&error) && attempt < CONNECT_LOCAL_ABORT_MAX_ATTEMPTS;
+                if !can_retry {
+                    return Err(error.into());
+                }
+
+                debug!(
+                    ?error,
+                    attempt,
+                    max_attempts = CONNECT_LOCAL_ABORT_MAX_ATTEMPTS,
+                    "service discovery failed with local abort; retrying"
+                );
+                if let Ok(true) = peripheral.is_connected().await {
+                    let _ = peripheral.disconnect().await;
+                }
+                sleep(local_abort_backoff(attempt)).await;
+            }
+        }
+    }
+
+    unreachable!("retry loop must return success or the final attempt error")
 }
 
 fn select_led_type_override(
@@ -1475,5 +1544,28 @@ mod tests {
     ) {
         let parsed = parse_screen_light_timeout_response(payload);
         assert_eq!(expected, parsed);
+    }
+
+    #[rstest]
+    #[case("org.bluez.Error.Failed le-connection-abort-by-local", true)]
+    #[case("org.bluez.Error.Failed LE-CONNECTION-ABORT-BY-LOCAL", true)]
+    #[case("org.bluez.Error.Failed Connection was aborted", false)]
+    fn is_local_abort_message_matches_expected(
+        #[case] message: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(expected, is_local_abort_message(message));
+    }
+
+    #[rstest]
+    #[case(1, 150)]
+    #[case(2, 300)]
+    #[case(3, 450)]
+    fn local_abort_backoff_scales_per_attempt(
+        #[case] attempt: usize,
+        #[case] expected_millis: u64,
+    ) {
+        let delay = local_abort_backoff(attempt);
+        assert_eq!(Duration::from_millis(expected_millis), delay);
     }
 }
