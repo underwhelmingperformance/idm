@@ -338,18 +338,20 @@ Protocol references:
 Behaviour:
 
 - Chunk raw GIF bytes at `4096` protocol chunk size.
-- Emit 16-byte GIF headers with proper flags/CRC/tail profile.
+- Emit 16-byte GIF headers with proper flags/CRC and typed media-tail bytes
+  (`MediaHeaderTail`).
 - Accept only syntactically valid GIF payloads via typed `GifAnimation`.
 - When device panel dimensions are known, reject GIFs whose logical screen
   dimensions differ.
 - Top-level `image` command detects GIF input and routes to this handler.
 - Use notification-driven flow control.
-- Default transport pacing uses no per-fragment sleep; callers may opt in with
-  explicit per-fragment delay when needed.
+- Default transport pacing uses `20 ms` per transport fragment; callers may
+  override the delay.
 - Drain stale notify events before upload to reduce cross-command ACK bleed.
 - Consume typed notification events from the session API rather than decoding
   raw notify payload bytes in handler code.
-- CLI wired via top-level `idm image <image_file>`.
+- CLI wired via top-level `idm image <image_file>` using device-profile-aware
+  automatic media-tail selection.
 
 ## Image Upload Handler (Non-DIY)
 
@@ -373,13 +375,58 @@ Behaviour:
   `Rgb888Frame` construction.
 - Reject payloads whose frame dimensions do not match active panel geometry.
 - Keep file/container decoding and resize/rotation outside this handler.
-- Align tail/profile bytes to target firmware behaviour.
+- Align tail bytes to target firmware behaviour via typed `MediaHeaderTail`.
 - Reuse chunker and flow-control primitives from GIF handler.
-- Default transport pacing uses no per-fragment sleep; callers may opt in with
-  explicit per-fragment delay when needed.
+- Default transport pacing uses `20 ms` per transport fragment; callers may
+  override the delay.
 - Consume typed notification events from the session API rather than decoding
   raw notify payload bytes in handler code.
-- CLI wired via top-level `idm image <image_file>`.
+- CLI wired via top-level `idm image <image_file>` using device-profile-aware
+  automatic media-tail selection.
+
+## Material Bank Sync Handler (Slideshow)
+
+Status: `TODO`  
+Priority: `P1`  
+
+Protocol references:
+
+- [System commands](protocol.md#system-commands) (Delete device material)
+- [Shared media tail byte pattern](protocol.md#shared-media-tail-byte-pattern-gif-image-text)
+- [GIF upload](protocol.md#gif-upload)
+- [Image upload (non-DIY)](protocol.md#image-upload-non-diy)
+- [Text upload](protocol.md#text-upload)
+- [Transfer family ACK patterns](protocol.md#transfer-family-ack-patterns)
+
+Behaviour:
+
+- Define "material bank" explicitly as the device-side ordered slot set used to
+  store renderable materials (image/GIF/text) for sequential playback.
+- Implement one operation that synchronises an ordered material set into the
+  device material bank.
+- Keep this flow distinct from one-shot `idm image` uploads.
+- Accept a typed list of materials (`image`/`gif`/`text`) to be synced as an
+  indexed device material bank.
+- Model this as "replace bank" semantics by default:
+  - send delete-material command first (`11 00 02 01 0C 00 01 02 ... 0B`);
+  - then upload each material in index order.
+- Route each item to the existing family handler and inject the target material
+  slot index into media-header byte `15`.
+- Apply time-sign conversion (`5s/10s/30s/60s/300s`) for slot-based uploads via
+  typed `MaterialTimeSign`; keep byte-tail policy centralised in typed
+  `MediaHeaderTail`.
+- Encode slideshow dwell time per material item in media-header bytes `13..14`
+  (u16 little-endian seconds) when slot byte `15` is not `12`.
+- Keep transfer ordering strict and ACK-driven: only start slot `n+1` after slot
+  `n` reports success.
+- Fail fast on first upload error and return typed context that includes the
+  failing slot index and transfer family.
+- Return a structured sync receipt (requested count, uploaded count, failed slot
+  if any, and per-item upload receipts).
+- Treat this handler as write-only for now:
+  - no protocol support is currently mapped for reading slot contents back from
+    the device;
+  - no confirmed command is currently mapped for "switch active slot now".
 
 ## DIY Upload Handler (Raw RGB)
 
@@ -536,6 +583,7 @@ Behaviour:
 - Explicitly return `unsupported` for:
   - Download currently displayed image/framebuffer.
   - Pulling current material payload bytes from device.
+  - Listing slot contents or active material-slot index.
 
 ## Password Handler
 
