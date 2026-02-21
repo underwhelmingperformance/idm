@@ -1,6 +1,6 @@
 # iDotMatrix Handler Plan
 
-[`protocol.md`](protocol.md) is the normative wire-format and protocol
+[`protocol.md`](./protocol.md) is the normative wire-format and protocol
 reference. This document is project-focused and defines which handlers we should
 implement, in priority order, with API shape and behaviour expectations.
 
@@ -11,9 +11,9 @@ Priority: `P0`
 
 Protocol references:
 
-- [GATT profiles and endpoint resolution](protocol.md#gatt-profiles-and-endpoint-resolution)
-- [Profile selection in practice](protocol.md#profile-selection-in-practice)
-- [Connection semantics and MTU](protocol.md#connection-semantics-and-mtu)
+- [GATT profiles and endpoint resolution](./protocol.md#gatt-profiles-and-endpoint-resolution)
+- [Profile selection in practice](./protocol.md#profile-selection-in-practice)
+- [Connection semantics and MTU](./protocol.md#connection-semantics-and-mtu)
 
 Behaviour:
 
@@ -57,10 +57,10 @@ per-device LED-type overrides and connect-time LED-info query.
 
 Protocol references:
 
-- [Discovery and model identification](protocol.md#discovery-and-model-identification)
-- [Scan acceptance algorithm](protocol.md#scan-acceptance-algorithm)
-- [Manufacturer payload layout](protocol.md#manufacturer-payload-layout)
-- [Shape and LED type resolution](protocol.md#shape-and-led-type-resolution)
+- [Discovery and model identification](./protocol.md#discovery-and-model-identification)
+- [Scan acceptance algorithm](./protocol.md#scan-acceptance-algorithm)
+- [Manufacturer payload layout](./protocol.md#manufacturer-payload-layout)
+- [Shape and LED type resolution](./protocol.md#shape-and-led-type-resolution)
 
 Behaviour:
 
@@ -116,10 +116,10 @@ surfaced in session metadata and consumed by text upload path validation.
 
 Protocol references:
 
-- [Shape and LED type resolution](protocol.md#shape-and-led-type-resolution)
-- [Joint mode mapping for ambiguous layouts](protocol.md#joint-mode-mapping-for-ambiguous-layouts)
-- [Canonical model-resolution algorithm](protocol.md#canonical-model-resolution-algorithm)
-- [Command routing rules](protocol.md#command-routing-rules)
+- [Shape and LED type resolution](./protocol.md#shape-and-led-type-resolution)
+- [Joint mode mapping for ambiguous layouts](./protocol.md#joint-mode-mapping-for-ambiguous-layouts)
+- [Canonical model-resolution algorithm](./protocol.md#canonical-model-resolution-algorithm)
+- [Command routing rules](./protocol.md#command-routing-rules)
 
 Behaviour:
 
@@ -163,8 +163,8 @@ Priority: `P0`
 
 Protocol references:
 
-- [Notify responses and flow control](protocol.md#notify-responses-and-flow-control)
-- [Device-info query response](protocol.md#device-info-query-response)
+- [Notify responses and flow control](./protocol.md#notify-responses-and-flow-control)
+- [Device-info query response](./protocol.md#device-info-query-response)
 
 Behaviour:
 
@@ -214,8 +214,8 @@ Priority: `P0`
 
 Protocol references:
 
-- [Frame families](protocol.md#frame-families)
-- [Serialisation rules](protocol.md#serialisation-rules)
+- [Frame families](./protocol.md#frame-families)
+- [Serialisation rules](./protocol.md#serialisation-rules)
 
 Behaviour:
 
@@ -246,7 +246,7 @@ impl FrameCodec {
 Status: `DONE`  
 Priority: `P0`
 
-Protocol reference: [Device/common control](protocol.md#devicecommon-control)
+Protocol reference: [Device/common control](./protocol.md#devicecommon-control)
 (Switchplate)
 
 Behaviour:
@@ -260,7 +260,7 @@ Behaviour:
 Status: `DONE`  
 Priority: `P0`
 
-Protocol reference: [Device/common control](protocol.md#devicecommon-control)
+Protocol reference: [Device/common control](./protocol.md#devicecommon-control)
 (Brightness)
 
 Behaviour:
@@ -274,7 +274,7 @@ Behaviour:
 Status: `DONE`  
 Priority: `P0`
 
-Protocol reference: [Device/common control](protocol.md#devicecommon-control)
+Protocol reference: [Device/common control](./protocol.md#devicecommon-control)
 (Sync time)
 
 Behaviour:
@@ -289,7 +289,7 @@ Behaviour:
 Status: `DONE`  
 Priority: `P0`
 
-Protocol reference: [Device/common control](protocol.md#devicecommon-control)
+Protocol reference: [Device/common control](./protocol.md#devicecommon-control)
 (Full-screen colour)
 
 Behaviour:
@@ -305,9 +305,9 @@ Priority: `P0`
 
 Protocol references:
 
-- [Text upload](protocol.md#text-upload)
-- [Command routing rules](protocol.md#command-routing-rules) (text-path rules)
-- [Transfer family ACK patterns](protocol.md#transfer-family-ack-patterns)
+- [Text upload](./protocol.md#text-upload)
+- [Command routing rules](./protocol.md#command-routing-rules) (text-path rules)
+- [Transfer family ACK patterns](./protocol.md#transfer-family-ack-patterns)
   (Text)
 
 Behaviour:
@@ -335,9 +335,9 @@ logical dimensions before transfer begins.
 
 Protocol references:
 
-- [GIF upload](protocol.md#gif-upload)
-- [Shared media tail byte pattern](protocol.md#shared-media-tail-byte-pattern-gif-image-text)
-- [Transfer family ACK patterns](protocol.md#transfer-family-ack-patterns) (GIF)
+- [GIF upload](./protocol.md#gif-upload)
+- [Shared media tail byte pattern](./protocol.md#shared-media-tail-byte-pattern-gif-image-text)
+- [Transfer family ACK patterns](./protocol.md#transfer-family-ack-patterns) (GIF)
 
 Behaviour:
 
@@ -383,10 +383,10 @@ and type-safe RGB888 payload validation bound to active panel dimensions.
 
 Protocol references:
 
-- [Image upload (non-DIY)](protocol.md#image-upload-non-diy)
-- [Display-intent payload semantics](protocol.md#display-intent-payload-semantics)
-- [Shared media tail byte pattern](protocol.md#shared-media-tail-byte-pattern-gif-image-text)
-- [Transfer family ACK patterns](protocol.md#transfer-family-ack-patterns)
+- [Image upload (non-DIY)](./protocol.md#image-upload-non-diy)
+- [Display-intent payload semantics](./protocol.md#display-intent-payload-semantics)
+- [Shared media tail byte pattern](./protocol.md#shared-media-tail-byte-pattern-gif-image-text)
+- [Transfer family ACK patterns](./protocol.md#transfer-family-ack-patterns)
   (Image)
 
 Behaviour:
@@ -415,12 +415,12 @@ Priority: `P1`
 
 Protocol references:
 
-- [System commands](protocol.md#system-commands) (Delete device material)
-- [Shared media tail byte pattern](protocol.md#shared-media-tail-byte-pattern-gif-image-text)
-- [GIF upload](protocol.md#gif-upload)
-- [Image upload (non-DIY)](protocol.md#image-upload-non-diy)
-- [Text upload](protocol.md#text-upload)
-- [Transfer family ACK patterns](protocol.md#transfer-family-ack-patterns)
+- [System commands](./protocol.md#system-commands) (Delete device material)
+- [Shared media tail byte pattern](./protocol.md#shared-media-tail-byte-pattern-gif-image-text)
+- [GIF upload](./protocol.md#gif-upload)
+- [Image upload (non-DIY)](./protocol.md#image-upload-non-diy)
+- [Text upload](./protocol.md#text-upload)
+- [Transfer family ACK patterns](./protocol.md#transfer-family-ack-patterns)
 
 Behaviour:
 
@@ -459,10 +459,10 @@ Priority: `P1`
 
 Protocol references:
 
-- [DIY raw RGB upload](protocol.md#diy-raw-rgb-upload)
-- [Display-intent payload semantics](protocol.md#display-intent-payload-semantics)
-- [DIY raw-image frame](protocol.md#diy-raw-image-frame-9-byte-header)
-- [Transfer family ACK patterns](protocol.md#transfer-family-ack-patterns) (DIY)
+- [DIY raw RGB upload](./protocol.md#diy-raw-rgb-upload)
+- [Display-intent payload semantics](./protocol.md#display-intent-payload-semantics)
+- [DIY raw-image frame](./protocol.md#diy-raw-image-frame-9-byte-header)
+- [Transfer family ACK patterns](./protocol.md#transfer-family-ack-patterns) (DIY)
 
 Behaviour:
 
@@ -476,7 +476,7 @@ Behaviour:
 Status: `TODO`  
 Priority: `P1`
 
-Protocol reference: [Device/common control](protocol.md#devicecommon-control)
+Protocol reference: [Device/common control](./protocol.md#devicecommon-control)
 (Clock mode/style)
 
 Behaviour:
@@ -489,7 +489,7 @@ Behaviour:
 Status: `TODO`  
 Priority: `P1`
 
-Protocol reference: [Device/common control](protocol.md#devicecommon-control)
+Protocol reference: [Device/common control](./protocol.md#devicecommon-control)
 (Countdown)
 
 Behaviour:
@@ -502,7 +502,7 @@ Behaviour:
 Status: `TODO`  
 Priority: `P1`
 
-Protocol reference: [Device/common control](protocol.md#devicecommon-control)
+Protocol reference: [Device/common control](./protocol.md#devicecommon-control)
 (Chronograph)
 
 Behaviour:
@@ -514,7 +514,7 @@ Behaviour:
 Status: `TODO`  
 Priority: `P1`
 
-Protocol reference: [Device/common control](protocol.md#devicecommon-control)
+Protocol reference: [Device/common control](./protocol.md#devicecommon-control)
 (Scoreboard)
 
 Behaviour:
@@ -531,7 +531,7 @@ from explicit query semantics and from the time-sync callback path; current
 implementation assumptions around a single query flow are incomplete.
 
 Protocol reference:
-[Device-info query response](protocol.md#device-info-query-response)
+[Device-info query response](./protocol.md#device-info-query-response)
 
 Behaviour:
 
@@ -553,7 +553,7 @@ but call-sites are not explicit in normal flows. We should probe this safely and
 capture per-device behaviour.
 
 Protocol reference:
-[Device-info query response](protocol.md#device-info-query-response)
+[Device-info query response](./protocol.md#device-info-query-response)
 
 Behaviour:
 
@@ -576,7 +576,7 @@ Comment: Expanded scope on `2026-02-16`. Query/readback (`05 00 0F 80 FF` ->
 `05 00 0F 80 <value>`) is confirmed; implementation must expose typed readback,
 not set-only writes.
 
-Protocol reference: [Device/common control](protocol.md#devicecommon-control)
+Protocol reference: [Device/common control](./protocol.md#devicecommon-control)
 (Screen-light timeout set/read)
 
 Behaviour:
@@ -594,8 +594,8 @@ framebuffer/current-image download command path was found.
 
 Protocol references:
 
-- [Device-info query response](protocol.md#device-info-query-response)
-- [Compatibility notes](protocol.md#compatibility-notes)
+- [Device-info query response](./protocol.md#device-info-query-response)
+- [Compatibility notes](./protocol.md#compatibility-notes)
 
 Behaviour:
 
@@ -614,7 +614,7 @@ Behaviour:
 Status: `TODO`  
 Priority: `P2`
 
-Protocol reference: [Device/common control](protocol.md#devicecommon-control)
+Protocol reference: [Device/common control](./protocol.md#devicecommon-control)
 (Set/Verify password)
 
 Behaviour:
@@ -629,8 +629,8 @@ Priority: `P2`
 
 Protocol references:
 
-- [Joint mode mapping for ambiguous layouts](protocol.md#joint-mode-mapping-for-ambiguous-layouts)
-- [Music/rhythm control](protocol.md#musicrhythm-control)
+- [Joint mode mapping for ambiguous layouts](./protocol.md#joint-mode-mapping-for-ambiguous-layouts)
+- [Music/rhythm control](./protocol.md#musicrhythm-control)
 
 Behaviour:
 
@@ -644,9 +644,9 @@ Priority: `P1`
 
 Protocol references:
 
-- [Timer transfer protocols](protocol.md#timer-transfer-protocols)
-- [Timer transfer frame](protocol.md#timer-transfer-frame-24-byte-header)
-- [Transfer family ACK patterns](protocol.md#transfer-family-ack-patterns)
+- [Timer transfer protocols](./protocol.md#timer-transfer-protocols)
+- [Timer transfer frame](./protocol.md#timer-transfer-frame-24-byte-header)
+- [Transfer family ACK patterns](./protocol.md#transfer-family-ack-patterns)
   (Timer)
 
 Behaviour:
@@ -662,9 +662,9 @@ Priority: `P1`
 
 Protocol references:
 
-- [Schedule transfer protocols](protocol.md#schedule-transfer-protocols)
-- [Schedule transfer frame](protocol.md#schedule-transfer-frame-23-byte-header)
-- [Schedule control responses](protocol.md#schedule-control-responses)
+- [Schedule transfer protocols](./protocol.md#schedule-transfer-protocols)
+- [Schedule transfer frame](./protocol.md#schedule-transfer-frame-23-byte-header)
+- [Schedule control responses](./protocol.md#schedule-control-responses)
 
 Behaviour:
 
@@ -680,10 +680,10 @@ Priority: `P1`
 
 Protocol references:
 
-- [OTA transfer protocol](protocol.md#ota-transfer-protocol)
-- [OTA data frame](protocol.md#ota-data-frame)
-- [OTA setup command](protocol.md#ota-setup-command)
-- [Transfer family ACK patterns](protocol.md#transfer-family-ack-patterns) (OTA)
+- [OTA transfer protocol](./protocol.md#ota-transfer-protocol)
+- [OTA data frame](./protocol.md#ota-data-frame)
+- [OTA setup command](./protocol.md#ota-setup-command)
+- [Transfer family ACK patterns](./protocol.md#transfer-family-ack-patterns) (OTA)
 
 Behaviour:
 
@@ -696,7 +696,7 @@ Behaviour:
 Status: `TODO`  
 Priority: `P2`
 
-Protocol reference: [Device/common control](protocol.md#devicecommon-control)
+Protocol reference: [Device/common control](./protocol.md#devicecommon-control)
 (Rotate 180)
 
 Behaviour:
@@ -711,8 +711,8 @@ Priority: `P2`
 
 Protocol references:
 
-- [DIY raw RGB upload](protocol.md#diy-raw-rgb-upload)
-- [Device/common control](protocol.md#devicecommon-control) (Enter/exit DIY
+- [DIY raw RGB upload](./protocol.md#diy-raw-rgb-upload)
+- [Device/common control](./protocol.md#devicecommon-control) (Enter/exit DIY
   mode)
 
 Behaviour:
