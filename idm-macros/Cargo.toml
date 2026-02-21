@@ -11,3 +11,9 @@ proc-macro-crate = "3.4.0"
 proc-macro2 = "1.0.106"
 quote = "1.0.44"
 syn = { version = "2.0.116", features = ["full"] }
+thiserror = "2.0.18"
+
+[dev-dependencies]
+indicatif = "0.18.4"
+tracing = { version = "0.1.44", features = ["attributes"] }
+tracing-indicatif = "0.3.14"

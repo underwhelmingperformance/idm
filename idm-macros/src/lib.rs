@@ -29,6 +29,12 @@ pub fn derive_has_diagnostics(input: TokenStream) -> TokenStream {
 /// injected into instrument fields automatically. If no `#[instrument]`
 /// attribute is present, one is added automatically.
 ///
+/// Set bare `show_elapsed` to include elapsed time in the rendered progress
+/// template.
+///
+/// Set `count_unit = ("singular", "plural")` to suffix counters with a unit
+/// label (for example `1 command`, `2 commands`).
+///
 /// `finished` is evaluated when the function body completes. During evaluation,
 /// `result` is available as a reference to the function return value.
 ///
@@ -39,20 +45,49 @@ pub fn derive_has_diagnostics(input: TokenStream) -> TokenStream {
 /// - `progress_inc!()` or `progress_inc!(<usize>)`
 /// - `progress_trace!(<completed>, <total>)`
 ///
-/// Progress-bar length is initialised to `0` when the function starts.
-/// The macro applies a per-span bar template only when it detects
-/// `progress_set_length!`, `progress_inc_length!`, or `progress_inc!` in the
-/// body. Otherwise, span rendering falls back to the global spinner-style
-/// template.
+/// Rendering mode is inferred from usage:
+/// - Determinate when `progress_set_length!` or `progress_inc_length!` is used.
+/// - Indeterminate when no length API is used.
 ///
-/// ```ignore
+/// If `progress_inc!` is used without a length API, the span remains
+/// indeterminate and displays a running command count.
+///
+/// `count_unit` requires `progress_inc!` so the displayed position can change.
+///
+/// ```no_run
+/// use idm_macros::progress;
+///
 /// #[progress(
-///     message = "Scanning for devices",
-///     finished = format!("{} Connected", "✓".green()),
-///     skip(self),
+///     message = "Executing transfer",
+///     finished = "done".to_string(),
+///     show_elapsed,
+///     count_unit = ("command", "commands"),
+///     skip_all,
 ///     level = "info",
 /// )]
-/// async fn connect(&self) -> Result<()> { /* ... */ }
+/// fn transfer() -> Result<(), Box<dyn std::error::Error>> {
+///     progress_inc!();
+///     Ok(())
+/// }
+/// # let _ = transfer;
+/// ```
+///
+/// ```no_run
+/// use idm_macros::progress;
+///
+/// #[progress(
+///     message = "Uploading payload",
+///     finished = "uploaded".to_string(),
+///     count_unit = ("chunk", "chunks"),
+///     skip_all,
+///     level = "debug",
+/// )]
+/// fn upload() -> Result<(), Box<dyn std::error::Error>> {
+///     progress_set_length!(8usize);
+///     progress_inc!();
+///     Ok(())
+/// }
+/// # let _ = upload;
 /// ```
 #[proc_macro_attribute]
 pub fn progress(attr: TokenStream, item: TokenStream) -> TokenStream {
