@@ -3,7 +3,7 @@ use std::fmt::{self, Display, Formatter};
 use idm_macros::DiagnosticsSection;
 
 use crate::hw::diagnostic_value::{Bytes, MissingOr, NoneOr, UnknownOr, YesNo};
-use crate::hw::diagnostics::DiagnosticRow;
+use crate::hw::diagnostics::{DiagnosticRow, DiagnosticSectionSnapshot};
 use crate::hw::{GattProfile, InspectReport, ServiceInfo, TextPath};
 use crate::protocol;
 
@@ -15,6 +15,7 @@ use super::table::Table;
 pub(crate) struct InspectReportView<'a> {
     report: &'a InspectReport,
     painter: &'a Painter,
+    runtime_diagnostics: &'a [DiagnosticSectionSnapshot],
 }
 
 #[derive(Debug, DiagnosticsSection)]
@@ -152,7 +153,19 @@ impl From<&InspectReport> for SessionMetadataSection {
 
 impl<'a> InspectReportView<'a> {
     pub(crate) fn new(report: &'a InspectReport, painter: &'a Painter) -> Self {
-        Self { report, painter }
+        Self {
+            report,
+            painter,
+            runtime_diagnostics: &[],
+        }
+    }
+
+    pub(crate) fn with_runtime_diagnostics(
+        mut self,
+        runtime_diagnostics: &'a [DiagnosticSectionSnapshot],
+    ) -> Self {
+        self.runtime_diagnostics = runtime_diagnostics;
+        self
     }
 
     fn endpoints_table(&self) -> Table {
@@ -258,6 +271,13 @@ impl<'a> InspectReportView<'a> {
             .map(|section| (section.name().to_string(), self.rows_table(section.rows())))
             .collect()
     }
+
+    fn runtime_diagnostics_tables(&self) -> Vec<(String, Table)> {
+        self.runtime_diagnostics
+            .iter()
+            .map(|section| (section.name().to_string(), self.rows_table(section.rows())))
+            .collect()
+    }
 }
 
 impl Display for InspectReportView<'_> {
@@ -278,6 +298,16 @@ impl Display for InspectReportView<'_> {
             let diagnostics_tables = self.connection_diagnostics_tables();
             writeln!(f)?;
             write!(f, "\n{}", self.painter.heading("Connection diagnostics:"))?;
+            for (section_name, table) in diagnostics_tables {
+                writeln!(f)?;
+                write!(f, "\n{}", self.painter.value(format!("{section_name}:")))?;
+                write!(f, "\n{table}")?;
+            }
+        }
+        if !self.runtime_diagnostics.is_empty() {
+            let diagnostics_tables = self.runtime_diagnostics_tables();
+            writeln!(f)?;
+            write!(f, "\n{}", self.painter.heading("Runtime diagnostics:"))?;
             for (section_name, table) in diagnostics_tables {
                 writeln!(f)?;
                 write!(f, "\n{}", self.painter.value(format!("{section_name}:")))?;

@@ -74,12 +74,16 @@ pub(crate) struct DiagnosticSectionSnapshot {
 }
 
 impl DiagnosticSectionSnapshot {
+    pub(crate) fn new(id: String, name: String, rows: Vec<DiagnosticRow>) -> Self {
+        Self { id, name, rows }
+    }
+
     fn from_section(section: &dyn DiagnosticsSection) -> Self {
-        Self {
-            id: section.section_id().to_string(),
-            name: section.section_name().to_string(),
-            rows: section.rows(),
-        }
+        Self::new(
+            section.section_id().to_string(),
+            section.section_name().to_string(),
+            section.rows(),
+        )
     }
 
     /// Returns the stable section identifier.

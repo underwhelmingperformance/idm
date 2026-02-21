@@ -20,22 +20,21 @@ use super::DeviceProfile;
 use super::hardware::{ConnectedBleSession, PayloadStream, WriteMode, missing_required_endpoints};
 use super::model::{
     CharacteristicInfo, EndpointPresence, FoundDevice, InspectReport, LedInfoQueryOutcome,
-    ScreenLightQueryOutcome, ServiceInfo, SessionMetadata,
+    ServiceInfo, SessionMetadata,
 };
 use super::model_overrides::{ModelOverrideStore, ModelResolutionConfig, is_supported_led_type};
 use super::model_resolution_diagnostics::{
-    LedInfoDiagnosticParams, ManufacturerDataRecord, ScanPropertiesDebug,
-    ScreenLightDiagnosticParams, ServiceDataRecord, model_resolution_diagnostics,
+    LedInfoDiagnosticParams, ManufacturerDataRecord, ScanPropertiesDebug, ServiceDataRecord,
+    model_resolution_diagnostics,
 };
 use super::profile::{resolve_device_profile, resolve_device_routing_profile};
 use super::scan_model::{ScanIdentity, ScanModelHandler};
-use super::session::negotiate_session_endpoints;
+use super::session::{NegotiatedSessionEndpoints, negotiate_session_endpoints};
 use crate::error::InteractionError;
 use crate::protocol::{self, EndpointId};
 
 const LED_INFO_QUERY_TIMEOUT_MS: u64 = 1_000;
 const GET_LED_INFO_QUERY: [u8; 4] = [0x04, 0x00, 0x01, 0x80];
-const READ_SCREEN_LIGHT_TIMEOUT_QUERY: [u8; 5] = [0x05, 0x00, 0x0F, 0x80, 0xFF];
 const CONNECT_LOCAL_ABORT_MAX_ATTEMPTS: usize = 3;
 const CONNECT_LOCAL_ABORT_BASE_BACKOFF_MS: u64 = 150;
 
@@ -137,58 +136,6 @@ enum LedInfoProbeResult {
         response: super::LedInfoResponse,
         payload: Vec<u8>,
     },
-    InvalidPayload(Vec<u8>),
-    NoResponse,
-}
-
-#[derive(Debug)]
-struct ScreenLightQueryResult {
-    timeout: Option<u8>,
-    outcome: ScreenLightQueryOutcome,
-    write_modes_attempted: Vec<String>,
-    last_payload: Option<Vec<u8>>,
-}
-
-impl ScreenLightQueryResult {
-    fn skipped(outcome: ScreenLightQueryOutcome) -> Self {
-        Self {
-            timeout: None,
-            outcome,
-            write_modes_attempted: Vec::new(),
-            last_payload: None,
-        }
-    }
-
-    fn resolved(
-        timeout: u8,
-        outcome: ScreenLightQueryOutcome,
-        write_modes_attempted: Vec<String>,
-    ) -> Self {
-        Self {
-            timeout: Some(timeout),
-            outcome,
-            write_modes_attempted,
-            last_payload: None,
-        }
-    }
-
-    fn unresolved(
-        outcome: ScreenLightQueryOutcome,
-        write_modes_attempted: Vec<String>,
-        last_payload: Option<Vec<u8>>,
-    ) -> Self {
-        Self {
-            timeout: None,
-            outcome,
-            write_modes_attempted,
-            last_payload,
-        }
-    }
-}
-
-#[derive(Debug)]
-enum ScreenLightProbeResult {
-    Parsed { timeout_value: u8, payload: Vec<u8> },
     InvalidPayload(Vec<u8>),
     NoResponse,
 }
@@ -305,73 +252,28 @@ impl BtleplugBackend {
     ) -> Result<RealDeviceSession, InteractionError> {
         let connected = self.find_and_connect_first_matching(name_prefix).await?;
         let connection_state = Arc::new(ConnectionStateCell::new(ConnectionState::Connected));
-        let disconnect_watcher = match connected.adapter.events().await {
-            Ok(mut events) => {
-                let target_peripheral_id = connected.peripheral.id();
-                let connection_state = Arc::clone(&connection_state);
-                Some(tokio::spawn(async move {
-                    while let Some(event) = events.next().await {
-                        match event {
-                            CentralEvent::DeviceDisconnected(peripheral_id)
-                                if peripheral_id == target_peripheral_id =>
-                            {
-                                connection_state.set(ConnectionState::Disconnected);
-                            }
-                            CentralEvent::DeviceConnected(peripheral_id)
-                                if peripheral_id == target_peripheral_id =>
-                            {
-                                connection_state.set(ConnectionState::Connected);
-                            }
-                            _ => {}
-                        }
-                    }
-                }))
-            }
-            Err(error) => {
-                debug!(
-                    ?error,
-                    "failed to subscribe to adapter events for connection-state tracking"
-                );
-                None
-            }
-        };
-
-        let (services, characteristics_by_uuid) =
-            collect_services_and_characteristics(&connected.peripheral);
-        let negotiated_endpoints = negotiate_session_endpoints(&services)?;
-        let endpoint_presence = negotiated_endpoints.endpoint_presence();
-        let characteristics_by_endpoint = characteristics_by_endpoint(
-            &negotiated_endpoints.endpoint_uuids,
-            &characteristics_by_uuid,
-        )?;
-
-        let missing = missing_required_endpoints(&endpoint_presence);
-        if !missing.is_empty() {
-            if let Err(error) = connected.peripheral.disconnect().await {
-                debug!(
-                    ?error,
-                    "failed to disconnect after endpoint validation error"
-                );
-            }
-
-            return Err(InteractionError::MissingRequiredEndpoints {
-                missing: format_missing_endpoints(&missing),
-            });
-        }
+        let disconnect_watcher = spawn_disconnect_watcher(
+            &connected.adapter,
+            &connected.peripheral,
+            Arc::clone(&connection_state),
+        )
+        .await;
+        let gatt_layout = resolve_gatt_layout(&connected).await?;
 
         let selected_led_type =
             select_led_type_override(&connected.device, &self.model_resolution)?;
-        let led_info_query =
-            query_led_info(&connected.peripheral, &characteristics_by_endpoint).await;
-        let screen_light_query =
-            query_screen_light_timeout(&connected.peripheral, &characteristics_by_endpoint).await;
+        let led_info_query = query_led_info(
+            &connected.peripheral,
+            &gatt_layout.characteristics_by_endpoint,
+        )
+        .await;
         let led_info = led_info_query.led_info;
         let device_routing_profile =
             resolve_device_routing_profile(&connected.device, led_info, selected_led_type);
         ensure_ambiguous_shape_is_resolved(&connected.device, device_routing_profile)?;
         maybe_apply_joint_mode(
             &connected.peripheral,
-            &characteristics_by_endpoint,
+            &gatt_layout.characteristics_by_endpoint,
             device_routing_profile,
         )
         .await?;
@@ -381,23 +283,11 @@ impl BtleplugBackend {
             &self.model_resolution,
         )?;
 
-        let negotiated_att_mtu = negotiated_att_mtu();
-        let write_without_response_limit = characteristics_by_endpoint
-            .get(&EndpointId::WriteCharacteristic)
-            .and_then(|characteristic| {
-                negotiated_transport_write_limit(characteristic.properties, negotiated_att_mtu)
-            });
-        trace!(
-            actual_mtu = negotiated_att_mtu,
-            write_without_response_limit,
-            using_fallback =
-                write_without_response_limit == Some(protocol::TRANSPORT_CHUNK_FALLBACK),
-            fallback_transport_chunk = protocol::TRANSPORT_CHUNK_FALLBACK,
-            "resolved session write-without-response limit"
-        );
+        let write_without_response_limit =
+            resolve_write_without_response_limit(&gatt_layout.characteristics_by_endpoint);
         let device_profile = resolve_device_profile(
             &connected.device,
-            &services,
+            &gatt_layout.services,
             write_without_response_limit,
             device_routing_profile,
         );
@@ -411,31 +301,114 @@ impl BtleplugBackend {
                 sync_time_fallback_attempted: led_info_query.sync_time_fallback_attempted,
                 last_payload: led_info_query.last_payload,
             },
-            ScreenLightDiagnosticParams {
-                query_outcome: screen_light_query.outcome,
-                write_modes_attempted: screen_light_query.write_modes_attempted,
-                last_payload: screen_light_query.last_payload,
-                timeout: screen_light_query.timeout,
-            },
         );
         let session_metadata =
             SessionMetadata::new(true, write_without_response_limit, device_profile)
                 .with_connection_diagnostics(connection_diagnostics)
                 .with_endpoint_resolution(
-                    negotiated_endpoints.gatt_profile,
-                    negotiated_endpoints.endpoint_uuids.clone(),
+                    gatt_layout.negotiated_endpoints.gatt_profile,
+                    gatt_layout.negotiated_endpoints.endpoint_uuids.clone(),
                 );
         Ok(RealDeviceSession {
             device: connected.device,
-            services,
-            endpoint_presence,
+            services: gatt_layout.services,
+            endpoint_presence: gatt_layout.endpoint_presence,
             session_metadata,
-            characteristics_by_endpoint,
+            characteristics_by_endpoint: gatt_layout.characteristics_by_endpoint,
             peripheral: connected.peripheral,
             connection_state,
             disconnect_watcher: Mutex::new(disconnect_watcher),
         })
     }
+}
+
+async fn spawn_disconnect_watcher(
+    adapter: &Adapter,
+    peripheral: &Peripheral,
+    connection_state: Arc<ConnectionStateCell>,
+) -> Option<JoinHandle<()>> {
+    match adapter.events().await {
+        Ok(mut events) => {
+            let target_peripheral_id = peripheral.id();
+            Some(tokio::spawn(async move {
+                while let Some(event) = events.next().await {
+                    match event {
+                        CentralEvent::DeviceDisconnected(peripheral_id)
+                            if peripheral_id == target_peripheral_id =>
+                        {
+                            connection_state.set(ConnectionState::Disconnected);
+                        }
+                        CentralEvent::DeviceConnected(peripheral_id)
+                            if peripheral_id == target_peripheral_id =>
+                        {
+                            connection_state.set(ConnectionState::Connected);
+                        }
+                        _ => {}
+                    }
+                }
+            }))
+        }
+        Err(error) => {
+            debug!(
+                ?error,
+                "failed to subscribe to adapter events for connection-state tracking"
+            );
+            None
+        }
+    }
+}
+
+async fn resolve_gatt_layout(
+    connected: &ConnectedPeripheral,
+) -> Result<SessionGattLayout, InteractionError> {
+    let (services, characteristics_by_uuid) =
+        collect_services_and_characteristics(&connected.peripheral);
+    let negotiated_endpoints = negotiate_session_endpoints(&services)?;
+    let endpoint_presence = negotiated_endpoints.endpoint_presence();
+    let characteristics_by_endpoint = characteristics_by_endpoint(
+        &negotiated_endpoints.endpoint_uuids,
+        &characteristics_by_uuid,
+    )?;
+
+    let missing = missing_required_endpoints(&endpoint_presence);
+    if !missing.is_empty() {
+        if let Err(error) = connected.peripheral.disconnect().await {
+            debug!(
+                ?error,
+                "failed to disconnect after endpoint validation error"
+            );
+        }
+
+        return Err(InteractionError::MissingRequiredEndpoints {
+            missing: format_missing_endpoints(&missing),
+        });
+    }
+
+    Ok(SessionGattLayout {
+        services,
+        endpoint_presence,
+        characteristics_by_endpoint,
+        negotiated_endpoints,
+    })
+}
+
+fn resolve_write_without_response_limit(
+    characteristics_by_endpoint: &HashMap<EndpointId, Characteristic>,
+) -> Option<usize> {
+    let negotiated_att_mtu = negotiated_att_mtu();
+    let write_without_response_limit = characteristics_by_endpoint
+        .get(&EndpointId::WriteCharacteristic)
+        .and_then(|characteristic| {
+            negotiated_transport_write_limit(characteristic.properties, negotiated_att_mtu)
+        });
+    trace!(
+        actual_mtu = negotiated_att_mtu,
+        write_without_response_limit,
+        using_fallback = write_without_response_limit == Some(protocol::TRANSPORT_CHUNK_FALLBACK),
+        fallback_transport_chunk = protocol::TRANSPORT_CHUNK_FALLBACK,
+        "resolved session write-without-response limit"
+    );
+    write_without_response_limit
 }
 
 fn is_local_abort_message(message: &str) -> bool {
@@ -602,262 +575,207 @@ async fn query_led_info(
     peripheral: &Peripheral,
     characteristics_by_endpoint: &HashMap<EndpointId, Characteristic>,
 ) -> LedInfoQueryResult {
+    let plan = match build_led_info_query_plan(characteristics_by_endpoint) {
+        Ok(plan) => plan,
+        Err(skipped) => return skipped,
+    };
+    let mut attempted_modes = Vec::with_capacity(plan.write_types.len().saturating_mul(2));
+    let mut last_payload = None;
+    if let Some(result) =
+        attempt_led_info_direct_queries(peripheral, &plan, &mut attempted_modes, &mut last_payload)
+            .await
+    {
+        return result;
+    }
+
+    let mut sync_time_fallback_attempted = false;
+    if plan.supports_notify {
+        sync_time_fallback_attempted = true;
+        if let Some(result) = attempt_led_info_sync_time_fallback(
+            peripheral,
+            &plan,
+            &mut attempted_modes,
+            &mut last_payload,
+        )
+        .await
+        {
+            return result;
+        }
+    }
+
+    unresolved_led_info_result(attempted_modes, last_payload, sync_time_fallback_attempted)
+}
+
+fn build_led_info_query_plan(
+    characteristics_by_endpoint: &HashMap<EndpointId, Characteristic>,
+) -> Result<LedInfoQueryPlan<'_>, LedInfoQueryResult> {
     let Some(write_characteristic) =
         characteristics_by_endpoint.get(&EndpointId::WriteCharacteristic)
     else {
-        return LedInfoQueryResult::skipped(LedInfoQueryOutcome::SkippedNoWriteCharacteristic);
+        return Err(LedInfoQueryResult::skipped(
+            LedInfoQueryOutcome::SkippedNoWriteCharacteristic,
+        ));
     };
     let Some(read_characteristic) =
         characteristics_by_endpoint.get(&EndpointId::ReadNotifyCharacteristic)
     else {
-        return LedInfoQueryResult::skipped(LedInfoQueryOutcome::SkippedNoNotifyOrRead);
+        return Err(LedInfoQueryResult::skipped(
+            LedInfoQueryOutcome::SkippedNoNotifyOrRead,
+        ));
     };
+
     let supports_read = read_characteristic.properties.contains(CharPropFlags::READ);
     let supports_notify = read_characteristic
         .properties
         .intersects(CharPropFlags::NOTIFY | CharPropFlags::INDICATE);
     if !supports_read && !supports_notify {
         trace!("skipping LED-info query because endpoint is neither readable nor notifiable");
-        return LedInfoQueryResult::skipped(LedInfoQueryOutcome::SkippedNoNotifyOrRead);
+        return Err(LedInfoQueryResult::skipped(
+            LedInfoQueryOutcome::SkippedNoNotifyOrRead,
+        ));
     }
 
     let write_types = write_types_for_characteristic(write_characteristic.properties);
     if write_types.is_empty() {
         trace!("skipping LED-info query because write endpoint is not writable");
-        return LedInfoQueryResult::skipped(LedInfoQueryOutcome::SkippedNoWriteCharacteristic);
+        return Err(LedInfoQueryResult::skipped(
+            LedInfoQueryOutcome::SkippedNoWriteCharacteristic,
+        ));
     }
 
-    let mut attempted_modes = Vec::with_capacity(write_types.len().saturating_mul(2));
-    let mut last_payload = None;
-    for write_type in write_types.iter().copied() {
+    Ok(LedInfoQueryPlan {
+        write_characteristic,
+        read_characteristic,
+        supports_read,
+        supports_notify,
+        write_types,
+    })
+}
+
+async fn attempt_led_info_direct_queries(
+    peripheral: &Peripheral,
+    plan: &LedInfoQueryPlan<'_>,
+    attempted_modes: &mut Vec<String>,
+    last_payload: &mut Option<Vec<u8>>,
+) -> Option<LedInfoQueryResult> {
+    for write_type in plan.write_types.iter().copied() {
         attempted_modes.push(format!("{}:get_led_type", write_type_label(write_type)));
 
-        if supports_notify {
+        if plan.supports_notify {
             match query_led_info_via_notify(
                 peripheral,
-                write_characteristic,
+                plan.write_characteristic,
                 write_type,
-                read_characteristic,
+                plan.read_characteristic,
                 &GET_LED_INFO_QUERY,
             )
             .await
             {
                 LedInfoProbeResult::Parsed { response, payload } => {
-                    return LedInfoQueryResult::resolved(
+                    return Some(LedInfoQueryResult::resolved(
                         response,
                         LedInfoQueryOutcome::ParsedNotify,
-                        attempted_modes,
+                        attempted_modes.clone(),
                         payload,
-                    );
+                    ));
                 }
                 LedInfoProbeResult::InvalidPayload(payload) => {
-                    last_payload = Some(payload);
-                    if !supports_read {
+                    *last_payload = Some(payload);
+                    if !plan.supports_read {
                         continue;
                     }
                 }
                 LedInfoProbeResult::NoResponse => {
-                    if !supports_read {
+                    if !plan.supports_read {
                         continue;
                     }
                 }
             }
         }
 
-        if supports_read {
+        if plan.supports_read {
             match query_led_info_via_read(
                 peripheral,
-                write_characteristic,
+                plan.write_characteristic,
                 write_type,
-                read_characteristic,
+                plan.read_characteristic,
                 &GET_LED_INFO_QUERY,
             )
             .await
             {
                 LedInfoProbeResult::Parsed { response, payload } => {
-                    return LedInfoQueryResult::resolved(
+                    return Some(LedInfoQueryResult::resolved(
                         response,
                         LedInfoQueryOutcome::ParsedRead,
-                        attempted_modes,
+                        attempted_modes.clone(),
                         payload,
-                    );
+                    ));
                 }
                 LedInfoProbeResult::InvalidPayload(payload) => {
-                    last_payload = Some(payload);
+                    *last_payload = Some(payload);
                 }
                 LedInfoProbeResult::NoResponse => {}
             }
         }
     }
 
-    let mut sync_time_fallback_attempted = false;
-    let sync_time_query = sync_time_query_frame(OffsetDateTime::now_utc());
-    if supports_notify {
-        sync_time_fallback_attempted = true;
-        for write_type in write_types {
-            attempted_modes.push(format!("{}:sync_time", write_type_label(write_type)));
-            match query_led_info_via_notify(
-                peripheral,
-                write_characteristic,
-                write_type,
-                read_characteristic,
-                &sync_time_query,
-            )
-            .await
-            {
-                LedInfoProbeResult::Parsed { response, payload } => {
-                    return LedInfoQueryResult::resolved(
-                        response,
-                        LedInfoQueryOutcome::ParsedNotifyAfterSyncTime,
-                        attempted_modes,
-                        payload,
-                    )
-                    .mark_sync_time_fallback_attempted();
-                }
-                LedInfoProbeResult::InvalidPayload(payload) => {
-                    last_payload = Some(payload);
-                }
-                LedInfoProbeResult::NoResponse => {}
-            }
-        }
-    }
-
-    if last_payload.is_some() {
-        let unresolved = LedInfoQueryResult::unresolved(
-            LedInfoQueryOutcome::InvalidResponse,
-            attempted_modes,
-            last_payload,
-        );
-        if sync_time_fallback_attempted {
-            unresolved.mark_sync_time_fallback_attempted()
-        } else {
-            unresolved
-        }
-    } else {
-        let unresolved =
-            LedInfoQueryResult::unresolved(LedInfoQueryOutcome::NoResponse, attempted_modes, None);
-        if sync_time_fallback_attempted {
-            unresolved.mark_sync_time_fallback_attempted()
-        } else {
-            unresolved
-        }
-    }
+    None
 }
 
-#[instrument(skip(peripheral, characteristics_by_endpoint), level = "debug")]
-async fn query_screen_light_timeout(
+async fn attempt_led_info_sync_time_fallback(
     peripheral: &Peripheral,
-    characteristics_by_endpoint: &HashMap<EndpointId, Characteristic>,
-) -> ScreenLightQueryResult {
-    let Some(write_characteristic) =
-        characteristics_by_endpoint.get(&EndpointId::WriteCharacteristic)
-    else {
-        return ScreenLightQueryResult::skipped(
-            ScreenLightQueryOutcome::SkippedNoWriteCharacteristic,
-        );
-    };
-    let Some(read_characteristic) =
-        characteristics_by_endpoint.get(&EndpointId::ReadNotifyCharacteristic)
-    else {
-        return ScreenLightQueryResult::skipped(ScreenLightQueryOutcome::SkippedNoNotifyOrRead);
-    };
-
-    let supports_read = read_characteristic.properties.contains(CharPropFlags::READ);
-    let supports_notify = read_characteristic
-        .properties
-        .intersects(CharPropFlags::NOTIFY | CharPropFlags::INDICATE);
-    if !supports_read && !supports_notify {
-        return ScreenLightQueryResult::skipped(ScreenLightQueryOutcome::SkippedNoNotifyOrRead);
-    }
-
-    let write_types = write_types_for_characteristic(write_characteristic.properties);
-    if write_types.is_empty() {
-        return ScreenLightQueryResult::skipped(
-            ScreenLightQueryOutcome::SkippedNoWriteCharacteristic,
-        );
-    }
-
-    let mut attempted_modes = Vec::with_capacity(write_types.len().saturating_mul(2));
-    let mut last_payload = None;
-
-    for write_type in write_types.iter().copied() {
-        attempted_modes.push(format!(
-            "{}:read_screen_light",
-            write_type_label(write_type)
-        ));
-
-        if supports_notify {
-            match query_screen_light_timeout_via_notify(
-                peripheral,
-                write_characteristic,
-                write_type,
-                read_characteristic,
-            )
-            .await
-            {
-                ScreenLightProbeResult::Parsed {
-                    timeout_value,
-                    payload: _payload,
-                } => {
-                    return ScreenLightQueryResult::resolved(
-                        timeout_value,
-                        ScreenLightQueryOutcome::ParsedNotify,
-                        attempted_modes,
-                    );
-                }
-                ScreenLightProbeResult::InvalidPayload(payload) => {
-                    last_payload = Some(payload);
-                    if !supports_read {
-                        continue;
-                    }
-                }
-                ScreenLightProbeResult::NoResponse => {
-                    if !supports_read {
-                        continue;
-                    }
-                }
-            }
-        }
-
-        if supports_read {
-            match query_screen_light_timeout_via_read(
-                peripheral,
-                write_characteristic,
-                write_type,
-                read_characteristic,
-            )
-            .await
-            {
-                ScreenLightProbeResult::Parsed {
-                    timeout_value,
-                    payload: _payload,
-                } => {
-                    return ScreenLightQueryResult::resolved(
-                        timeout_value,
-                        ScreenLightQueryOutcome::ParsedRead,
-                        attempted_modes,
-                    );
-                }
-                ScreenLightProbeResult::InvalidPayload(payload) => {
-                    last_payload = Some(payload);
-                }
-                ScreenLightProbeResult::NoResponse => {}
-            }
-        }
-    }
-
-    if last_payload.is_some() {
-        ScreenLightQueryResult::unresolved(
-            ScreenLightQueryOutcome::InvalidResponse,
-            attempted_modes,
-            last_payload,
+    plan: &LedInfoQueryPlan<'_>,
+    attempted_modes: &mut Vec<String>,
+    last_payload: &mut Option<Vec<u8>>,
+) -> Option<LedInfoQueryResult> {
+    let sync_time_query = sync_time_query_frame(OffsetDateTime::now_utc());
+    for write_type in plan.write_types.iter().copied() {
+        attempted_modes.push(format!("{}:sync_time", write_type_label(write_type)));
+        match query_led_info_via_notify(
+            peripheral,
+            plan.write_characteristic,
+            write_type,
+            plan.read_characteristic,
+            &sync_time_query,
         )
+        .await
+        {
+            LedInfoProbeResult::Parsed { response, payload } => {
+                return Some(
+                    LedInfoQueryResult::resolved(
+                        response,
+                        LedInfoQueryOutcome::ParsedNotifyAfterSyncTime,
+                        attempted_modes.clone(),
+                        payload,
+                    )
+                    .mark_sync_time_fallback_attempted(),
+                );
+            }
+            LedInfoProbeResult::InvalidPayload(payload) => {
+                *last_payload = Some(payload);
+            }
+            LedInfoProbeResult::NoResponse => {}
+        }
+    }
+
+    None
+}
+
+fn unresolved_led_info_result(
+    attempted_modes: Vec<String>,
+    last_payload: Option<Vec<u8>>,
+    sync_time_fallback_attempted: bool,
+) -> LedInfoQueryResult {
+    let outcome = if last_payload.is_some() {
+        LedInfoQueryOutcome::InvalidResponse
     } else {
-        ScreenLightQueryResult::unresolved(
-            ScreenLightQueryOutcome::NoResponse,
-            attempted_modes,
-            None,
-        )
+        LedInfoQueryOutcome::NoResponse
+    };
+    let unresolved = LedInfoQueryResult::unresolved(outcome, attempted_modes, last_payload);
+    if sync_time_fallback_attempted {
+        unresolved.mark_sync_time_fallback_attempted()
+    } else {
+        unresolved
     }
 }
 
@@ -999,157 +917,6 @@ async fn query_led_info_via_read(
             LedInfoProbeResult::NoResponse
         }
     }
-}
-
-#[instrument(
-    skip(peripheral, write_characteristic, read_characteristic),
-    level = "trace",
-    fields(?write_type)
-)]
-async fn query_screen_light_timeout_via_notify(
-    peripheral: &Peripheral,
-    write_characteristic: &Characteristic,
-    write_type: WriteType,
-    read_characteristic: &Characteristic,
-) -> ScreenLightProbeResult {
-    let mut notifications = match peripheral.notifications().await {
-        Ok(stream) => stream,
-        Err(error) => {
-            trace!(
-                ?error,
-                "failed to open notification stream for screen-light query"
-            );
-            return ScreenLightProbeResult::NoResponse;
-        }
-    };
-
-    if let Err(error) = peripheral.subscribe(read_characteristic).await {
-        trace!(
-            ?error,
-            "failed to subscribe for screen-light query notifications"
-        );
-        return ScreenLightProbeResult::NoResponse;
-    }
-
-    if let Err(error) = peripheral
-        .write(
-            write_characteristic,
-            &READ_SCREEN_LIGHT_TIMEOUT_QUERY,
-            write_type,
-        )
-        .await
-    {
-        let _ = peripheral.unsubscribe(read_characteristic).await;
-        trace!(?error, "failed to write screen-light timeout query");
-        return ScreenLightProbeResult::NoResponse;
-    }
-
-    let deadline = tokio::time::Instant::now() + Duration::from_millis(LED_INFO_QUERY_TIMEOUT_MS);
-    let mut first_invalid_payload = None;
-    loop {
-        let now = tokio::time::Instant::now();
-        if now >= deadline {
-            let _ = peripheral.unsubscribe(read_characteristic).await;
-            return first_invalid_payload.map_or(
-                ScreenLightProbeResult::NoResponse,
-                ScreenLightProbeResult::InvalidPayload,
-            );
-        }
-
-        let remaining = deadline - now;
-        let notification = match timeout(remaining, notifications.next()).await {
-            Ok(Some(value)) => value,
-            Ok(None) => {
-                let _ = peripheral.unsubscribe(read_characteristic).await;
-                return first_invalid_payload.map_or(
-                    ScreenLightProbeResult::NoResponse,
-                    ScreenLightProbeResult::InvalidPayload,
-                );
-            }
-            Err(_elapsed) => {
-                let _ = peripheral.unsubscribe(read_characteristic).await;
-                return first_invalid_payload.map_or(
-                    ScreenLightProbeResult::NoResponse,
-                    ScreenLightProbeResult::InvalidPayload,
-                );
-            }
-        };
-
-        if !notification.uuid.eq(&read_characteristic.uuid) {
-            continue;
-        }
-
-        let payload = notification.value;
-        if let Some(timeout_value) = parse_screen_light_timeout_response(&payload) {
-            let _ = peripheral.unsubscribe(read_characteristic).await;
-            return ScreenLightProbeResult::Parsed {
-                timeout_value,
-                payload,
-            };
-        }
-
-        if first_invalid_payload.is_none() {
-            first_invalid_payload = Some(payload);
-        }
-    }
-}
-
-#[instrument(
-    skip(peripheral, write_characteristic, read_characteristic),
-    level = "trace",
-    fields(?write_type)
-)]
-async fn query_screen_light_timeout_via_read(
-    peripheral: &Peripheral,
-    write_characteristic: &Characteristic,
-    write_type: WriteType,
-    read_characteristic: &Characteristic,
-) -> ScreenLightProbeResult {
-    if let Err(error) = peripheral
-        .write(
-            write_characteristic,
-            &READ_SCREEN_LIGHT_TIMEOUT_QUERY,
-            write_type,
-        )
-        .await
-    {
-        trace!(?error, "failed to write screen-light timeout query");
-        return ScreenLightProbeResult::NoResponse;
-    }
-
-    match timeout(
-        Duration::from_millis(LED_INFO_QUERY_TIMEOUT_MS),
-        peripheral.read(read_characteristic),
-    )
-    .await
-    {
-        Ok(Ok(payload)) => {
-            if let Some(timeout_value) = parse_screen_light_timeout_response(&payload) {
-                ScreenLightProbeResult::Parsed {
-                    timeout_value,
-                    payload,
-                }
-            } else {
-                ScreenLightProbeResult::InvalidPayload(payload)
-            }
-        }
-        Ok(Err(error)) => {
-            trace!(?error, "failed to read screen-light timeout response");
-            ScreenLightProbeResult::NoResponse
-        }
-        Err(_elapsed) => ScreenLightProbeResult::NoResponse,
-    }
-}
-
-fn parse_screen_light_timeout_response(payload: &[u8]) -> Option<u8> {
-    if payload.len() < 5 {
-        return None;
-    }
-    if payload[2] != 0x0F || payload[3] != 0x80 {
-        return None;
-    }
-
-    Some(payload[4])
 }
 
 fn write_type_label(write_type: WriteType) -> &'static str {
@@ -1459,6 +1226,23 @@ struct ConnectedPeripheral {
     scan_properties_debug: ScanPropertiesDebug,
 }
 
+#[derive(Debug)]
+struct SessionGattLayout {
+    services: Vec<ServiceInfo>,
+    endpoint_presence: EndpointPresence,
+    characteristics_by_endpoint: HashMap<EndpointId, Characteristic>,
+    negotiated_endpoints: NegotiatedSessionEndpoints,
+}
+
+#[derive(Debug)]
+struct LedInfoQueryPlan<'a> {
+    write_characteristic: &'a Characteristic,
+    read_characteristic: &'a Characteristic,
+    supports_read: bool,
+    supports_notify: bool,
+    write_types: Vec<WriteType>,
+}
+
 fn collect_services_and_characteristics(
     peripheral: &Peripheral,
 ) -> (Vec<ServiceInfo>, HashMap<String, Characteristic>) {
@@ -1701,18 +1485,6 @@ mod tests {
             ],
             frame
         );
-    }
-
-    #[rstest]
-    #[case(&[0x05, 0x00, 0x0F, 0x80, 0x1E], Some(0x1E))]
-    #[case(&[0x04, 0x00, 0x0F, 0x80], None)]
-    #[case(&[0x05, 0x00, 0x01, 0x80, 0x04], None)]
-    fn parse_screen_light_timeout_response_matches_expected(
-        #[case] payload: &[u8],
-        #[case] expected: Option<u8>,
-    ) {
-        let parsed = parse_screen_light_timeout_response(payload);
-        assert_eq!(expected, parsed);
     }
 
     #[rstest]

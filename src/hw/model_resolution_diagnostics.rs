@@ -3,7 +3,7 @@ use idm_macros::{DiagnosticsSection, HasDiagnostics};
 use super::LedInfoResponse;
 use super::diagnostic_value::{HexBytes, JoinedStrings, NoneOr, YesNo};
 use super::diagnostics::{ConnectionDiagnostics, ConnectionDiagnosticsBuilder};
-use super::model::{LedInfoQueryOutcome, ScreenLightQueryOutcome};
+use super::model::LedInfoQueryOutcome;
 use super::scan_model::ScanIdentity;
 use crate::utils::format_hex;
 
@@ -197,31 +197,23 @@ impl LedInfoProbeSection {
 #[diagnostics(id = "device_state", section = "Device state")]
 struct DeviceStateSection {
     #[diagnostic(name = "LED info available")]
-    led_info_available: YesNo,
+    info_available: YesNo,
     #[diagnostic(name = "LED info query outcome")]
-    led_info_query_outcome: LedInfoQueryOutcome,
+    info_query_outcome: LedInfoQueryOutcome,
     #[diagnostic(name = "LED screen type")]
-    led_screen_type: NoneOr<u8>,
+    screen_type: NoneOr<u8>,
     #[diagnostic(name = "LED status byte")]
-    led_status_byte: NoneOr<u8>,
+    status_byte: NoneOr<u8>,
     #[diagnostic(name = "LED password enabled")]
-    led_password_enabled: NoneOr<YesNo>,
+    password_enabled: NoneOr<YesNo>,
     #[diagnostic(name = "LED MCU version")]
-    led_mcu_version: NoneOr<String>,
-    #[diagnostic(name = "Screen-light timeout available")]
-    screen_light_timeout_available: YesNo,
-    #[diagnostic(name = "Screen-light query outcome")]
-    screen_light_query_outcome: ScreenLightQueryOutcome,
-    #[diagnostic(name = "Screen-light timeout value")]
-    screen_light_timeout_value: NoneOr<u8>,
+    mcu_version: NoneOr<String>,
 }
 
 impl DeviceStateSection {
     fn from_probe_results(
         led_info_response: Option<LedInfoResponse>,
         led_info_query_outcome: LedInfoQueryOutcome,
-        screen_light_query_outcome: ScreenLightQueryOutcome,
-        screen_light_timeout: Option<u8>,
     ) -> Self {
         let led_mcu_version = led_info_response.map(|response| {
             format!(
@@ -231,17 +223,14 @@ impl DeviceStateSection {
         });
 
         Self {
-            led_info_available: YesNo(led_info_response.is_some()),
-            led_info_query_outcome,
-            led_screen_type: NoneOr(led_info_response.map(|response| response.screen_type)),
-            led_status_byte: NoneOr(led_info_response.map(|response| response.status)),
-            led_password_enabled: NoneOr(
+            info_available: YesNo(led_info_response.is_some()),
+            info_query_outcome: led_info_query_outcome,
+            screen_type: NoneOr(led_info_response.map(|response| response.screen_type)),
+            status_byte: NoneOr(led_info_response.map(|response| response.status)),
+            password_enabled: NoneOr(
                 led_info_response.map(|response| YesNo(response.password_enabled)),
             ),
-            led_mcu_version: NoneOr(led_mcu_version),
-            screen_light_timeout_available: YesNo(screen_light_timeout.is_some()),
-            screen_light_query_outcome,
-            screen_light_timeout_value: NoneOr(screen_light_timeout),
+            mcu_version: NoneOr(led_mcu_version),
         }
     }
 }
@@ -266,19 +255,11 @@ pub(crate) struct LedInfoDiagnosticParams {
     pub(crate) last_payload: Option<Vec<u8>>,
 }
 
-pub(crate) struct ScreenLightDiagnosticParams {
-    pub(crate) query_outcome: ScreenLightQueryOutcome,
-    pub(crate) write_modes_attempted: Vec<String>,
-    pub(crate) last_payload: Option<Vec<u8>>,
-    pub(crate) timeout: Option<u8>,
-}
-
 /// Constructs connect-time model resolution diagnostics.
 pub(crate) fn model_resolution_diagnostics(
     scan_identity: Option<ScanIdentity>,
     scan_properties_debug: Option<&ScanPropertiesDebug>,
     led_info: LedInfoDiagnosticParams,
-    screen_light: ScreenLightDiagnosticParams,
 ) -> ConnectionDiagnostics {
     let sections = ModelResolutionSections {
         scan_identity: ScanIdentitySection::from_scan_identity(scan_identity),
@@ -292,48 +273,12 @@ pub(crate) fn model_resolution_diagnostics(
         device_state: DeviceStateSection::from_probe_results(
             led_info.response,
             led_info.query_outcome,
-            screen_light.query_outcome,
-            screen_light.timeout,
         ),
     };
 
     let mut diagnostics = ConnectionDiagnosticsBuilder::new();
     diagnostics.extend(&sections);
-    if !screen_light.write_modes_attempted.is_empty() || screen_light.last_payload.is_some() {
-        diagnostics.push_section(&ScreenLightProbeSection::from_screen_light_probe(
-            screen_light.query_outcome,
-            screen_light.write_modes_attempted,
-            screen_light.last_payload,
-        ));
-    }
     diagnostics.finish()
-}
-
-#[derive(Debug, Clone, Eq, PartialEq, DiagnosticsSection)]
-#[diagnostics(id = "screen_light_probe", section = "Screen-light probe")]
-struct ScreenLightProbeSection {
-    #[diagnostic(name = "Query outcome")]
-    query_outcome: ScreenLightQueryOutcome,
-    #[diagnostic(name = "Write modes attempted")]
-    write_modes_attempted: NoneOr<JoinedStrings>,
-    #[diagnostic(name = "Last payload")]
-    last_payload: NoneOr<HexBytes>,
-}
-
-impl ScreenLightProbeSection {
-    fn from_screen_light_probe(
-        outcome: ScreenLightQueryOutcome,
-        write_modes_attempted: Vec<String>,
-        last_payload: Option<Vec<u8>>,
-    ) -> Self {
-        Self {
-            query_outcome: outcome,
-            write_modes_attempted: NoneOr(
-                JoinedStrings::comma(write_modes_attempted).into_option(),
-            ),
-            last_payload: NoneOr(last_payload.map(HexBytes)),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -401,12 +346,6 @@ mod tests {
                 sync_time_fallback_attempted: false,
                 last_payload: None,
             },
-            ScreenLightDiagnosticParams {
-                query_outcome: ScreenLightQueryOutcome::NoResponse,
-                write_modes_attempted: Vec::new(),
-                last_payload: None,
-                timeout: None,
-            },
         );
         let rows = section_rows(&diagnostics, "scan_identity");
         assert_eq!(expected_rows, rows);
@@ -443,12 +382,6 @@ mod tests {
                 ],
                 sync_time_fallback_attempted: true,
                 last_payload: Some(vec![0x09, 0x00, 0x01, 0x80, 0x05, 0x03, 0x01, 0x04, 0x00]),
-            },
-            ScreenLightDiagnosticParams {
-                query_outcome: ScreenLightQueryOutcome::ParsedRead,
-                write_modes_attempted: vec!["without_response:read_screen_light".to_string()],
-                last_payload: Some(vec![0x05, 0x00, 0x0F, 0x80, 0x1E]),
-                timeout: Some(0x1E),
             },
         );
 
@@ -501,28 +434,8 @@ mod tests {
                 ("LED status byte".to_string(), "1".to_string()),
                 ("LED password enabled".to_string(), "no".to_string()),
                 ("LED MCU version".to_string(), "5.3".to_string()),
-                (
-                    "Screen-light timeout available".to_string(),
-                    "yes".to_string(),
-                ),
-                (
-                    "Screen-light query outcome".to_string(),
-                    "parsed_read".to_string(),
-                ),
-                ("Screen-light timeout value".to_string(), "30".to_string()),
             ],
             section_rows(&diagnostics, "device_state")
-        );
-        assert_eq!(
-            vec![
-                ("Query outcome".to_string(), "parsed_read".to_string()),
-                (
-                    "Write modes attempted".to_string(),
-                    "without_response:read_screen_light".to_string(),
-                ),
-                ("Last payload".to_string(), "05 00 0F 80 1E".to_string()),
-            ],
-            section_rows(&diagnostics, "screen_light_probe")
         );
     }
 }

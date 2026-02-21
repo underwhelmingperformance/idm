@@ -1,6 +1,6 @@
 ---
 source: tests/commands_cli.rs
-assertion_line: 46
+assertion_line: 64
 expression: stdout.trim_end()
 ---
 Connected device:
@@ -34,6 +34,18 @@ Session metadata:
 │ Profile GIF header                    │ timed                                │
 │ Profile write chunk fallback          │ 509 bytes                            │
 ╰───────────────────────────────────────┴──────────────────────────────────────╯
+
+Runtime diagnostics:
+
+Screen-light timeout probe:
+╭───────────────────────┬──────────────────────────────────────────────────────────────────────────────╮
+│ field                 │ value                                                                        │
+├───────────────────────┼──────────────────────────────────────────────────────────────────────────────┤
+│ Query outcome         │ invalid_response                                                             │
+│ Write modes attempted │ without_response:read_screen_light_read,with_response:read_screen_light_read │
+│ Timeout value         │ <none>                                                                       │
+│ Last payload          │ 05 00 01 00 01                                                               │
+╰───────────────────────┴──────────────────────────────────────────────────────────────────────────────╯
 
 Expected iDotMatrix endpoints:
 ╭──────────────────────────────────────┬────────────────┬─────────────────────────────┬─────────╮

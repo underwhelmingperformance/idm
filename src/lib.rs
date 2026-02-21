@@ -25,9 +25,10 @@ pub use handlers::{
     FullscreenColourHandler, GifChunkFlag, GifHeaderFields, GifUploadError, GifUploadHandler,
     GifUploadReceipt, GifUploadRequest, ImageHeaderFields, ImageUploadError, ImageUploadHandler,
     ImageUploadReceipt, ImageUploadRequest, MaterialSlot, MaterialTimeSign, MediaHeaderTail,
-    OtaChunkHeaderFields, PowerHandler, Rgb, ScreenPower, ShortFrame, TextHeaderFields,
-    TextOptions, TextUploadError, TextUploadHandler, TextUploadRequest, TimeSyncHandler,
-    TimedMaterialSlot, UploadAckError, UploadPacing, UploadReceipt,
+    OtaChunkHeaderFields, PowerHandler, Rgb, ScreenLightTimeoutHandler, ScreenLightTimeoutProbe,
+    ScreenLightTimeoutProbeOutcome, ScreenPower, ShortFrame, TextHeaderFields, TextOptions,
+    TextUploadError, TextUploadHandler, TextUploadRequest, TimeSyncHandler, TimedMaterialSlot,
+    UploadAckError, UploadPacing, UploadReceipt,
 };
 pub use hw::{
     AckAction, AmbiguousShape, CharacteristicInfo, DeviceProfile, DeviceSession, EndpointPresence,
