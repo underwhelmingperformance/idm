@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use tokio::time::timeout;
 use tokio_stream::Stream;
 use tokio_util::sync::CancellationToken;
-use tracing::{info, instrument, trace};
+use tracing::{Span, info, instrument, trace};
 
 use super::btleplug_backend::BtleplugBackend;
 use super::fake_backend::{FakeBackend, FakeBackendConfig};
@@ -127,12 +127,62 @@ impl<T: BleTransport> SessionHandler<T> {
     }
 
     /// Connects to the first matching device and returns a session.
-    #[instrument(skip(self), level = "debug", fields(prefix = name_prefix))]
+    #[instrument(
+        skip(self),
+        level = "debug",
+        fields(
+            prefix = name_prefix,
+            reported_write_without_response_limit = tracing::field::Empty,
+            profile_write_chunk_fallback = tracing::field::Empty,
+            baseline_transport_chunk_limit = tracing::field::Empty,
+            adaptive_transport_chunk_limit_initial = tracing::field::Empty,
+            device_id = tracing::field::Empty,
+            led_type = tracing::field::Empty,
+            panel_width = tracing::field::Empty,
+            panel_height = tracing::field::Empty
+        )
+    )]
     pub(crate) async fn connect_first(
         self,
         name_prefix: &str,
     ) -> Result<DeviceSession, InteractionError> {
+        const UNUSABLE_WRITE_WITHOUT_RESPONSE_LIMIT: usize = 20;
+
         let session = self.transport.connect_first_matching(name_prefix).await?;
+        let fallback = session.device_profile().write_without_response_fallback();
+        let reported = session.write_without_response_limit();
+        let baseline = match reported {
+            Some(limit) if limit > UNUSABLE_WRITE_WITHOUT_RESPONSE_LIMIT => limit,
+            _ => fallback,
+        };
+        let adaptive_initial = if baseline <= crate::protocol::TRANSPORT_CHUNK_FALLBACK {
+            crate::protocol::TRANSPORT_CHUNK_MTU_READY
+        } else {
+            baseline.min(crate::protocol::TRANSPORT_CHUNK_MTU_READY)
+        };
+
+        let profile = session.device_profile();
+        let span = Span::current();
+        tracing::record_all!(
+            span,
+            reported_write_without_response_limit = ?reported,
+            profile_write_chunk_fallback = fallback,
+            baseline_transport_chunk_limit = baseline,
+            adaptive_transport_chunk_limit_initial = adaptive_initial,
+            device_id = %session.device().device_id_display()
+        );
+
+        if let Some(led_type) = profile.led_type() {
+            span.record("led_type", u64::from(led_type));
+        }
+        if let Some(panel_dimensions) = profile.panel_dimensions() {
+            tracing::record_all!(
+                span,
+                panel_width = panel_dimensions.width(),
+                panel_height = panel_dimensions.height()
+            );
+        }
+
         Ok(DeviceSession { session })
     }
 }

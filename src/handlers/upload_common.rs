@@ -3,7 +3,7 @@ use std::time::Duration;
 use thiserror::Error;
 use tokio::time::{sleep, timeout};
 use tokio_stream::StreamExt;
-use tracing::instrument;
+use tracing::{Span, instrument};
 
 use super::transport_chunk_sizer::AdaptiveChunkSizer;
 use crate::error::{InteractionError, ProtocolError};
@@ -163,33 +163,62 @@ pub enum UploadAckError {
 #[instrument(
     skip(stream),
     level = "trace",
-    fields(timeout_ms = timeout_duration.as_millis(), ?transfer_family)
+    fields(
+        timeout_ms = timeout_duration.as_millis(),
+        ?transfer_family,
+        notify_event_kind = tracing::field::Empty,
+        notify_status = tracing::field::Empty
+    )
 )]
 pub(super) async fn wait_for_transfer_ack(
     stream: &mut NotificationSubscription,
     timeout_duration: Duration,
     transfer_family: TransferFamily,
 ) -> Result<UploadAckOutcome, UploadAckError> {
+    let span = Span::current();
     match timeout(timeout_duration, stream.next()).await {
         Err(_elapsed) => {
+            span.record("notify_event_kind", "timeout");
             let timeout_ms = u64::try_from(timeout_duration.as_millis()).unwrap_or(u64::MAX);
             Err(UploadAckError::Timeout { timeout_ms })
         }
-        Ok(None) => Err(UploadAckError::MissingAck),
-        Ok(Some(Err(error))) => Err(UploadAckError::from(error)),
+        Ok(None) => {
+            span.record("notify_event_kind", "stream_closed");
+            Err(UploadAckError::MissingAck)
+        }
+        Ok(Some(Err(error))) => {
+            span.record("notify_event_kind", "stream_error");
+            Err(UploadAckError::from(error))
+        }
         Ok(Some(Ok(message))) => {
-            let event = message.event?;
+            let event = match message.event {
+                Ok(event) => event,
+                Err(error) => {
+                    span.record("notify_event_kind", "decode_error");
+                    return Err(UploadAckError::from(error));
+                }
+            };
             match event {
                 NotifyEvent::NextPackage(family) if family == transfer_family => {
+                    span.record("notify_event_kind", "next_package");
                     Ok(UploadAckOutcome::Continue)
                 }
                 NotifyEvent::Finished(family) if family == transfer_family => {
+                    span.record("notify_event_kind", "finished");
                     Ok(UploadAckOutcome::Finished)
                 }
                 NotifyEvent::Error(family, status) if family == transfer_family => {
+                    tracing::record_all!(
+                        span,
+                        notify_event_kind = "error",
+                        notify_status = u64::from(status)
+                    );
                     Err(UploadAckError::TransferRejected { status })
                 }
-                _other => Err(UploadAckError::UnexpectedEvent),
+                _other => {
+                    span.record("notify_event_kind", "unexpected_event");
+                    Err(UploadAckError::UnexpectedEvent)
+                },
             }
         }
     }
