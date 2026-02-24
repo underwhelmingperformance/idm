@@ -10,6 +10,8 @@ mod telemetry;
 mod terminal;
 mod utils;
 
+// ── Public API ───────────────────────────────────────────────────────
+
 pub use app::{
     SessionHandler, fake_hardware_client, real_hardware_client,
     real_hardware_client_with_model_resolution, run, run_with_clients,
@@ -21,14 +23,12 @@ pub use cli::{
 };
 pub use error::{FixtureError, InteractionError, ProtocolError};
 pub use handlers::{
-    Brightness, BrightnessError, BrightnessHandler, DiyPrefixFields, FrameCodec, FrameCodecError,
-    FullscreenColourHandler, GifChunkFlag, GifHeaderFields, GifUploadError, GifUploadHandler,
-    GifUploadReceipt, GifUploadRequest, ImageHeaderFields, ImageUploadError, ImageUploadHandler,
-    ImageUploadReceipt, ImageUploadRequest, MaterialSlot, MaterialTimeSign, MediaHeaderTail,
-    OtaChunkHeaderFields, PowerHandler, Rgb, ScreenLightTimeoutHandler, ScreenLightTimeoutProbe,
-    ScreenLightTimeoutProbeOutcome, ScreenPower, ShortFrame, TextHeaderFields, TextOptions,
-    TextUploadError, TextUploadHandler, TextUploadRequest, TimeSyncHandler, TimedMaterialSlot,
-    UploadAckError, UploadPacing, UploadReceipt,
+    Brightness, BrightnessError, BrightnessHandler, FrameCodecError, FullscreenColourHandler,
+    GifUploadError, GifUploadHandler, GifUploadReceipt, GifUploadRequest, ImageUploadError,
+    ImageUploadHandler, ImageUploadReceipt, ImageUploadRequest, MaterialSlot, MaterialTimeSign,
+    MediaHeaderTail, PowerHandler, Rgb, ScreenLightTimeoutHandler, ScreenLightTimeoutProbe,
+    ScreenLightTimeoutProbeOutcome, ScreenPower, TextOptions, TextUploadError, TextUploadHandler,
+    TextUploadRequest, TimeSyncHandler, TimedMaterialSlot, UploadAckError, UploadReceipt,
 };
 pub use hw::{
     AckAction, AmbiguousShape, CharacteristicInfo, DeviceProfile, DeviceSession, EndpointPresence,
@@ -44,8 +44,14 @@ pub use media::{
     PreparedStillImage, Rgb888Frame, Rgb888FrameError,
 };
 pub use notification::{
-    NotificationDecodeError, NotificationHandler, NotifyEvent, ScheduleMasterSwitchStatus,
-    ScheduleSetupStatus, TransferFamily,
+    NotificationDecodeError, NotifyEvent, ScheduleMasterSwitchStatus, ScheduleSetupStatus,
+    TransferFamily,
 };
 pub use protocol::EndpointId;
 pub use terminal::TerminalClient;
+
+// ── Crate-internal re-exports ────────────────────────────────────────
+
+pub(crate) use handlers::{
+    DiyPrefixFields, FrameCodec, GifChunkFlag, GifHeaderFields, ImageHeaderFields, TextHeaderFields,
+};

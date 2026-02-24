@@ -7,14 +7,14 @@ mod power;
 mod screen_light_timeout;
 mod text_upload;
 mod time_sync;
-mod transport_chunk_sizer;
-mod upload_common;
+pub(crate) mod upload_common;
 
 pub use self::brightness::{Brightness, BrightnessError, BrightnessHandler};
+pub(crate) use self::frame_codec::{
+    DiyPrefixFields, FrameCodec, GifChunkFlag, GifHeaderFields, ImageHeaderFields, TextHeaderFields,
+};
 pub use self::frame_codec::{
-    DiyPrefixFields, FrameCodec, FrameCodecError, GifChunkFlag, GifHeaderFields, ImageHeaderFields,
-    MaterialSlot, MaterialTimeSign, MediaHeaderTail, OtaChunkHeaderFields, ShortFrame,
-    TextHeaderFields, TimedMaterialSlot,
+    FrameCodecError, MaterialSlot, MaterialTimeSign, MediaHeaderTail, TimedMaterialSlot,
 };
 pub use self::fullscreen_colour::{FullscreenColourHandler, Rgb};
 pub use self::gif_upload::{GifUploadError, GifUploadHandler, GifUploadReceipt, GifUploadRequest};
@@ -26,7 +26,7 @@ pub use self::screen_light_timeout::{
     ScreenLightTimeoutHandler, ScreenLightTimeoutProbe, ScreenLightTimeoutProbeOutcome,
 };
 pub use self::text_upload::{
-    TextOptions, TextUploadError, TextUploadHandler, TextUploadRequest, UploadPacing, UploadReceipt,
+    TextOptions, TextUploadError, TextUploadHandler, TextUploadRequest, UploadReceipt,
 };
 pub use self::time_sync::TimeSyncHandler;
 pub use self::upload_common::UploadAckError;

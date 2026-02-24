@@ -1,9 +1,14 @@
+use std::sync::atomic::{AtomicUsize, Ordering};
+
 use crate::protocol;
 
-/// Adaptive transport chunk sizing used for write-without-response probing.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(super) struct AdaptiveChunkSizer {
-    current: usize,
+/// Adaptive transport chunk sizing with lock-free interior mutability.
+///
+/// Shared across all operations on a connection so that backoff state
+/// discovered during one transfer benefits subsequent transfers.
+#[derive(Debug)]
+pub(crate) struct AdaptiveChunkSizer {
+    current: AtomicUsize,
 }
 
 impl AdaptiveChunkSizer {
@@ -11,34 +16,45 @@ impl AdaptiveChunkSizer {
     ///
     /// When baseline resolves to the conservative fallback, start by probing at
     /// MTU-ready size and back off on failures.
-    #[must_use]
-    pub(super) fn from_baseline(baseline: usize) -> Self {
+    pub(crate) fn from_baseline(baseline: usize) -> Self {
         let baseline = baseline.max(protocol::TRANSPORT_CHUNK_FALLBACK);
         let current = if baseline <= protocol::TRANSPORT_CHUNK_FALLBACK {
             protocol::TRANSPORT_CHUNK_MTU_READY
         } else {
             baseline.min(protocol::TRANSPORT_CHUNK_MTU_READY)
         };
-        Self { current }
+        Self {
+            current: AtomicUsize::new(current),
+        }
     }
 
     /// Returns current transport chunk size.
     #[must_use]
-    pub(super) fn current(self) -> usize {
-        self.current
+    pub(crate) fn current(&self) -> usize {
+        self.current.load(Ordering::Relaxed)
     }
 
     /// Halves current chunk size, saturating at protocol fallback.
     ///
     /// Returns `true` when chunk size was reduced, or `false` when already at
     /// minimum and cannot reduce further.
-    pub(super) fn reduce_on_failure(&mut self) -> bool {
-        if self.current <= protocol::TRANSPORT_CHUNK_FALLBACK {
-            return false;
+    pub(crate) fn reduce_on_failure(&self) -> bool {
+        let mut prev = self.current.load(Ordering::Relaxed);
+        loop {
+            if prev <= protocol::TRANSPORT_CHUNK_FALLBACK {
+                return false;
+            }
+            let next = (prev / 2).max(protocol::TRANSPORT_CHUNK_FALLBACK);
+            match self.current.compare_exchange_weak(
+                prev,
+                next,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return true,
+                Err(actual) => prev = actual,
+            }
         }
-
-        self.current = (self.current / 2).max(protocol::TRANSPORT_CHUNK_FALLBACK);
-        true
     }
 }
 
@@ -63,7 +79,7 @@ mod tests {
 
     #[test]
     fn reduce_on_failure_halves_until_fallback() {
-        let mut sizer = AdaptiveChunkSizer::from_baseline(18);
+        let sizer = AdaptiveChunkSizer::from_baseline(18);
         let mut observed = vec![sizer.current()];
 
         while sizer.reduce_on_failure() {
@@ -71,6 +87,6 @@ mod tests {
         }
 
         assert_eq!(vec![509, 254, 127, 63, 31, 18], observed);
-        assert_eq!(false, sizer.reduce_on_failure());
+        assert!(!sizer.reduce_on_failure());
     }
 }

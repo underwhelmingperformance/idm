@@ -1,26 +1,20 @@
-use std::time::Duration;
-
 use bon::Builder;
 use crc32fast::hash;
 use font8x8::UnicodeFonts;
 use idm_macros::progress;
 use thiserror::Error;
-use tokio::time::timeout;
-use tokio_stream::StreamExt;
 use tokio_util::sync::CancellationToken;
-use tracing::instrument;
 
 use crate::error::ProtocolError;
-use crate::hw::{DeviceSession, NotificationSubscription, TextPath, WriteMode};
+use crate::handlers::upload_common::{UploadAckOutcome, drain_stale_notifications};
+use crate::hw::{DeviceSession, TextPath, WriteMode};
 use crate::protocol::EndpointId;
-use crate::{FrameCodec, NotificationDecodeError, NotifyEvent, Rgb, TransferFamily};
+use crate::{FrameCodec, Rgb, TransferFamily};
 
 use super::FrameCodecError;
 
 const METADATA_LEN: usize = 14;
 const LOGICAL_CHUNK_SIZE: usize = 4096;
-const DEFAULT_NOTIFY_ACK_TIMEOUT: Duration = Duration::from_secs(5);
-const UNUSABLE_WRITE_WITHOUT_RESPONSE_LIMIT: usize = 20;
 const FONT_BITMAP_WIDTH: usize = 8;
 const FONT_BITMAP_HEIGHT: usize = 8;
 
@@ -33,27 +27,15 @@ pub enum TextUploadError {
     TooManyCharacters { count: usize, max: usize },
     #[error("write chunk size cannot be zero")]
     InvalidChunkSize,
-    #[error("notification acknowledgement timed out after {timeout_ms}ms")]
-    NotifyAckTimeout { timeout_ms: u64 },
-    #[error("notification stream ended before an acknowledgement was received")]
-    MissingNotifyAck,
-    #[error("received unexpected notification while waiting for an acknowledgement")]
-    UnexpectedNotifyEvent,
     #[error("text upload path is unresolved for this device routing profile")]
     UnresolvedTextPath,
-    #[error(transparent)]
-    NotifyDecode(#[from] NotificationDecodeError),
-}
-
-/// Pacing strategy used while writing upload chunks.
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub enum UploadPacing {
-    /// Do not pace between transport chunks.
-    None,
-    /// Sleep for a fixed delay after each transport chunk.
-    Delay { per_chunk: Duration },
-    /// Wait for one notification acknowledgement after each transport chunk.
-    NotifyAck { timeout: Duration },
+    #[error(
+        "device reported text transfer completion too early at block {block_index} of {total_blocks}"
+    )]
+    PrematureFinish {
+        block_index: usize,
+        total_blocks: usize,
+    },
 }
 
 /// Text upload rendering options.
@@ -125,14 +107,10 @@ pub struct TextUploadRequest {
     text: String,
     #[builder(default = TextOptions::default())]
     options: TextOptions,
-    #[builder(default = UploadPacing::NotifyAck {
-        timeout: DEFAULT_NOTIFY_ACK_TIMEOUT,
-    })]
-    pacing: UploadPacing,
 }
 
 impl TextUploadRequest {
-    /// Creates a text upload request with default options and notify-ack pacing.
+    /// Creates a text upload request with default options.
     ///
     /// ```
     /// use idm::TextUploadRequest;
@@ -145,9 +123,6 @@ impl TextUploadRequest {
         Self {
             text: text.into(),
             options: TextOptions::default(),
-            pacing: UploadPacing::NotifyAck {
-                timeout: DEFAULT_NOTIFY_ACK_TIMEOUT,
-            },
         }
     }
 }
@@ -234,75 +209,52 @@ impl TextUploadHandler {
     ) -> Result<UploadReceipt, ProtocolError> {
         tracing::trace!(
             text_char_count = request.text.chars().count(),
-            ?request.pacing,
             "starting text upload"
         );
         ensure_text_path_is_resolved(session)?;
         let frame_blocks = build_upload_blocks(session, &request)?;
-        let chunk_size = write_chunk_size(session)?;
 
         let mut chunks_written = 0usize;
         let mut bytes_written = 0usize;
         let endpoint = EndpointId::ReadNotifyCharacteristic;
-        let use_notify = matches!(request.pacing, UploadPacing::NotifyAck { .. });
 
-        let mut stream = if use_notify {
-            Some(
-                session
-                    .notification_stream(endpoint, None, CancellationToken::new())
-                    .await?,
-            )
-        } else {
-            None
-        };
+        let mut stream = session
+            .notification_stream(endpoint, None, CancellationToken::new())
+            .await?;
 
-        let transport_chunks_total: usize = frame_blocks
-            .iter()
-            .map(|block| block.len().div_ceil(chunk_size))
-            .sum();
-        progress_set_length!(transport_chunks_total);
+        drain_stale_notifications(&mut stream, "text").await?;
 
-        for block in &frame_blocks {
-            for transport_chunk in block.chunks(chunk_size) {
-                session
-                    .write_endpoint(
-                        EndpointId::WriteCharacteristic,
-                        transport_chunk,
-                        WriteMode::WithoutResponse,
-                    )
-                    .await?;
-                bytes_written += transport_chunk.len();
-                chunks_written += 1;
-                progress_inc!();
-                progress_trace!(chunks_written, transport_chunks_total);
-                apply_transport_pacing(request.pacing).await?;
+        let total_blocks = frame_blocks.len();
+        progress_set_length!(total_blocks);
+
+        for (index, block) in frame_blocks.iter().enumerate() {
+            let (stats, ack_outcome) = session
+                .write_with_ack(
+                    block,
+                    WriteMode::WithoutResponse,
+                    &mut stream,
+                    TransferFamily::Text,
+                )
+                .await?;
+            bytes_written += stats.bytes_written;
+            chunks_written += stats.chunks_written;
+            progress_inc!();
+            if matches!(ack_outcome, UploadAckOutcome::Finished) {
+                let block_number = index + 1;
+                if block_number < total_blocks {
+                    return Err(TextUploadError::PrematureFinish {
+                        block_index: block_number,
+                        total_blocks,
+                    }
+                    .into());
+                }
+                break;
             }
-            apply_block_pacing(stream.as_mut(), request.pacing).await?;
         }
 
         drop(stream);
         Ok(UploadReceipt::new(bytes_written, chunks_written))
     }
-}
-
-fn write_chunk_size(session: &DeviceSession) -> Result<usize, ProtocolError> {
-    let fallback = session.device_profile().write_without_response_fallback();
-    let reported_limit = session.write_without_response_limit();
-    let chunk_size = match reported_limit {
-        Some(limit) if limit > UNUSABLE_WRITE_WITHOUT_RESPONSE_LIMIT => limit,
-        _ => fallback,
-    };
-    tracing::trace!(
-        write_without_response_limit = reported_limit,
-        fallback_chunk = fallback,
-        selected_chunk_size = chunk_size,
-        using_fallback = chunk_size == fallback,
-        "resolved text upload chunk size"
-    );
-    if chunk_size == 0 {
-        return Err(TextUploadError::InvalidChunkSize.into());
-    }
-    Ok(chunk_size)
 }
 
 fn ensure_text_path_is_resolved(session: &DeviceSession) -> Result<(), ProtocolError> {
@@ -312,64 +264,6 @@ fn ensure_text_path_is_resolved(session: &DeviceSession) -> Result<(), ProtocolE
     }
 
     Ok(())
-}
-
-#[instrument(level = "trace", fields(?pacing))]
-async fn apply_transport_pacing(pacing: UploadPacing) -> Result<(), ProtocolError> {
-    match pacing {
-        UploadPacing::None => Ok(()),
-        UploadPacing::Delay { per_chunk } => {
-            if !per_chunk.is_zero() {
-                tokio::time::sleep(per_chunk).await;
-            }
-            Ok(())
-        }
-        UploadPacing::NotifyAck { timeout: _ } => Ok(()),
-    }
-}
-
-#[instrument(skip(stream), level = "trace", fields(?pacing))]
-async fn apply_block_pacing(
-    stream: Option<&mut NotificationSubscription>,
-    pacing: UploadPacing,
-) -> Result<(), ProtocolError> {
-    match pacing {
-        UploadPacing::None | UploadPacing::Delay { .. } => Ok(()),
-        UploadPacing::NotifyAck { timeout } => {
-            wait_for_notify_ack(
-                stream.expect("stream required for NotifyAck pacing"),
-                timeout,
-            )
-            .await
-        }
-    }
-}
-
-#[instrument(skip(stream), level = "trace", fields(timeout_ms = timeout_duration.as_millis()))]
-async fn wait_for_notify_ack(
-    stream: &mut NotificationSubscription,
-    timeout_duration: Duration,
-) -> Result<(), ProtocolError> {
-    tracing::trace!(
-        timeout_ms = timeout_duration.as_millis(),
-        "waiting for text-upload acknowledgement"
-    );
-    match timeout(timeout_duration, stream.next()).await {
-        Err(_elapsed) => {
-            let timeout_ms = u64::try_from(timeout_duration.as_millis()).unwrap_or(u64::MAX);
-            Err(TextUploadError::NotifyAckTimeout { timeout_ms }.into())
-        }
-        Ok(None) => Err(TextUploadError::MissingNotifyAck.into()),
-        Ok(Some(Err(error))) => Err(error.into()),
-        Ok(Some(Ok(message))) => {
-            let event = message.event?;
-            match event {
-                NotifyEvent::NextPackage(TransferFamily::Text)
-                | NotifyEvent::Finished(TransferFamily::Text) => Ok(()),
-                _other => Err(TextUploadError::UnexpectedNotifyEvent.into()),
-            }
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy)]

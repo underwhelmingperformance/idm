@@ -2,8 +2,8 @@ use serde_with::SerializeDisplay;
 use std::collections::HashMap;
 use tracing::instrument;
 
-use super::hardware::missing_required_endpoints;
-use super::model::{CharacteristicInfo, EndpointPresence, ServiceInfo};
+use super::super::hardware::missing_required_endpoints;
+use super::super::model::{CharacteristicInfo, EndpointPresence, ServiceInfo};
 use crate::error::InteractionError;
 use crate::protocol::{self, EndpointId};
 

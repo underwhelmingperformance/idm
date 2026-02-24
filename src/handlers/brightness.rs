@@ -3,7 +3,6 @@ use tracing::instrument;
 
 use crate::error::ProtocolError;
 use crate::hw::{DeviceSession, WriteMode};
-use crate::protocol::EndpointId;
 
 use super::{FrameCodec, FrameCodecError};
 
@@ -92,13 +91,7 @@ impl BrightnessHandler {
         brightness: Brightness,
     ) -> Result<(), ProtocolError> {
         let frame = Self::frame_for(brightness)?;
-        session
-            .write_endpoint(
-                EndpointId::WriteCharacteristic,
-                &frame,
-                WriteMode::WithoutResponse,
-            )
-            .await?;
+        session.write(&frame, WriteMode::WithoutResponse).await?;
         Ok(())
     }
 }

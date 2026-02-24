@@ -1,16 +1,10 @@
-use std::time::Duration;
-
 use bon::Builder;
 use crc32fast::hash;
 use idm_macros::progress;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
-use super::transport_chunk_sizer::AdaptiveChunkSizer;
-use super::upload_common::{
-    UploadAckOutcome, apply_fragment_delay, drain_stale_notifications, remaining_transport_chunks,
-    resolve_upload_chunk_sizing, wait_for_transfer_ack,
-};
+use super::upload_common::{UploadAckOutcome, drain_stale_notifications};
 use crate::error::ProtocolError;
 use crate::hw::{DeviceSession, PanelDimensions, WriteMode};
 use crate::protocol::EndpointId;
@@ -19,9 +13,6 @@ use crate::{
 };
 
 const LOGICAL_CHUNK_SIZE: usize = 4096;
-const DEFAULT_PER_FRAGMENT_DELAY: Duration = Duration::from_millis(20);
-const DEFAULT_NOTIFY_ACK_TIMEOUT: Duration = Duration::from_secs(5);
-const MEDIA_HEADER_LEN: usize = 16;
 
 /// Errors returned by image upload operations.
 #[derive(Debug, Error)]
@@ -62,16 +53,12 @@ pub enum ImageUploadError {
 #[derive(Debug, Clone, Eq, PartialEq, Builder)]
 pub struct ImageUploadRequest {
     frame: Rgb888Frame,
-    #[builder(default = DEFAULT_PER_FRAGMENT_DELAY)]
-    per_fragment_delay: Duration,
-    #[builder(default = DEFAULT_NOTIFY_ACK_TIMEOUT)]
-    ack_timeout: Duration,
     #[builder(default = MediaHeaderTail::default())]
     media_header_tail: MediaHeaderTail,
 }
 
 impl ImageUploadRequest {
-    /// Creates an image upload request using default pacing.
+    /// Creates an image upload request.
     ///
     /// ```
     /// use idm::{ImageUploadRequest, PanelDimensions, Rgb888Frame};
@@ -86,8 +73,6 @@ impl ImageUploadRequest {
     pub fn new(frame: Rgb888Frame) -> Self {
         Self {
             frame,
-            per_fragment_delay: DEFAULT_PER_FRAGMENT_DELAY,
-            ack_timeout: DEFAULT_NOTIFY_ACK_TIMEOUT,
             media_header_tail: MediaHeaderTail::default(),
         }
     }
@@ -122,42 +107,6 @@ impl ImageUploadRequest {
     #[must_use]
     pub fn frame(&self) -> &Rgb888Frame {
         &self.frame
-    }
-
-    /// Returns the configured transport-fragment delay.
-    ///
-    /// ```
-    /// use std::time::Duration;
-    ///
-    /// use idm::{ImageUploadRequest, PanelDimensions, Rgb888Frame};
-    ///
-    /// let dimensions = PanelDimensions::new(1, 1).expect("1x1 should be valid");
-    /// let frame = Rgb888Frame::try_from((dimensions, vec![0x01, 0x02, 0x03]))
-    ///     .expect("1x1 frame should require 3 bytes");
-    /// let request = ImageUploadRequest::new(frame);
-    /// assert_eq!(Duration::from_millis(20), request.per_fragment_delay());
-    /// ```
-    #[must_use]
-    pub fn per_fragment_delay(&self) -> Duration {
-        self.per_fragment_delay
-    }
-
-    /// Returns the configured chunk-acknowledgement timeout.
-    ///
-    /// ```
-    /// use std::time::Duration;
-    ///
-    /// use idm::{ImageUploadRequest, PanelDimensions, Rgb888Frame};
-    ///
-    /// let dimensions = PanelDimensions::new(1, 1).expect("1x1 should be valid");
-    /// let frame = Rgb888Frame::try_from((dimensions, vec![0x01, 0x02, 0x03]))
-    ///     .expect("1x1 frame should require 3 bytes");
-    /// let request = ImageUploadRequest::new(frame);
-    /// assert_eq!(Duration::from_secs(5), request.ack_timeout());
-    /// ```
-    #[must_use]
-    pub fn ack_timeout(&self) -> Duration {
-        self.ack_timeout
     }
 
     /// Returns the media-header tail policy used for bytes `13..15`.
@@ -319,13 +268,7 @@ impl ImageUploadHandler {
         }
 
         let payload = request.payload();
-        let baseline_chunk_size = write_chunk_size(session)?;
-        let mut chunk_sizer = AdaptiveChunkSizer::from_baseline(baseline_chunk_size);
-        let logical_chunk_sizes: Vec<usize> = payload
-            .chunks(LOGICAL_CHUNK_SIZE)
-            .map(|logical_chunk| MEDIA_HEADER_LEN + logical_chunk.len())
-            .collect();
-        let logical_chunks_total = logical_chunk_sizes.len();
+        let logical_chunks_total = payload.chunks(LOGICAL_CHUNK_SIZE).count();
         let crc32 = hash(payload);
         let payload_len_u32 = u32::try_from(payload.len()).map_err(|_overflow| {
             ImageUploadError::PayloadTooLarge {
@@ -344,11 +287,7 @@ impl ImageUploadHandler {
         let mut bytes_written = 0usize;
         let mut chunks_written = 0usize;
         let mut logical_chunks_sent = 0usize;
-        let mut transport_chunks_total: usize = logical_chunk_sizes
-            .iter()
-            .map(|block_len| block_len.div_ceil(chunk_sizer.current()))
-            .sum();
-        progress_set_length!(transport_chunks_total);
+        progress_set_length!(logical_chunks_total);
 
         for (index, logical_chunk) in payload.chunks(LOGICAL_CHUNK_SIZE).enumerate() {
             let chunk_flag = if index == 0 {
@@ -372,56 +311,17 @@ impl ImageUploadHandler {
             frame_block.extend_from_slice(logical_chunk);
             logical_chunks_sent += 1;
 
-            let mut block_offset = 0usize;
-            while block_offset < frame_block.len() {
-                let chunk_size = chunk_sizer.current();
-                let block_end = usize::min(block_offset + chunk_size, frame_block.len());
-                let transport_chunk = &frame_block[block_offset..block_end];
-                match session
-                    .write_endpoint(
-                        EndpointId::WriteCharacteristic,
-                        transport_chunk,
-                        WriteMode::WithoutResponse,
-                    )
-                    .await
-                {
-                    Ok(()) => {
-                        bytes_written += transport_chunk.len();
-                        chunks_written += 1;
-                        block_offset = block_end;
-                        progress_inc!();
-                        progress_trace!(chunks_written, transport_chunks_total);
-                        apply_fragment_delay(request.per_fragment_delay).await;
-                    }
-                    Err(error) => {
-                        let previous_chunk_size = chunk_sizer.current();
-                        if !chunk_sizer.reduce_on_failure() {
-                            return Err(error.into());
-                        }
-                        let next_chunk_size = chunk_sizer.current();
-                        let remaining_chunks = remaining_transport_chunks(
-                            &logical_chunk_sizes,
-                            index,
-                            block_offset,
-                            next_chunk_size,
-                        );
-                        transport_chunks_total = chunks_written + remaining_chunks;
-                        progress_set_length!(transport_chunks_total);
-                        tracing::debug!(
-                            ?error,
-                            previous_chunk_size,
-                            next_chunk_size,
-                            logical_chunk_index = index + 1,
-                            logical_chunks_total,
-                            "write failed during image upload; reducing chunk size and retrying"
-                        );
-                    }
-                }
-            }
-
-            let ack_outcome =
-                wait_for_transfer_ack(&mut stream, request.ack_timeout, TransferFamily::Image)
-                    .await?;
+            let (stats, ack_outcome) = session
+                .write_with_ack(
+                    &frame_block,
+                    WriteMode::WithoutResponse,
+                    &mut stream,
+                    TransferFamily::Image,
+                )
+                .await?;
+            bytes_written += stats.bytes_written;
+            chunks_written += stats.chunks_written;
+            progress_inc!();
             if matches!(ack_outcome, UploadAckOutcome::Finished) {
                 let chunk_number = index + 1;
                 if chunk_number < logical_chunks_total {
@@ -444,42 +344,21 @@ impl ImageUploadHandler {
     }
 }
 
-fn write_chunk_size(session: &DeviceSession) -> Result<usize, ProtocolError> {
-    let chunk_sizing = resolve_upload_chunk_sizing(session);
-    tracing::trace!(
-        write_without_response_limit = chunk_sizing.reported_limit(),
-        fallback_chunk = chunk_sizing.fallback_chunk(),
-        baseline_chunk_size = chunk_sizing.baseline_chunk_size(),
-        initial_probe_chunk_size = chunk_sizing.initial_probe_chunk_size(),
-        probing_enabled = chunk_sizing.probing_enabled(),
-        using_fallback_baseline = chunk_sizing.using_fallback_baseline(),
-        "resolved image upload chunk sizing"
-    );
-    if chunk_sizing.baseline_chunk_size() == 0 {
-        return Err(ImageUploadError::InvalidChunkSize.into());
-    }
-    Ok(chunk_sizing.baseline_chunk_size())
-}
-
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
     use pretty_assertions::assert_eq;
     use rstest::rstest;
 
     use super::*;
 
     #[test]
-    fn image_upload_request_defaults_match_protocol_pacing() -> Result<(), crate::Rgb888FrameError>
+    fn image_upload_request_defaults_match_expected_fields() -> Result<(), crate::Rgb888FrameError>
     {
         let dimensions = PanelDimensions::new(1, 1).expect("1x1 should be valid");
         let frame = Rgb888Frame::try_from((dimensions, vec![0x89, 0x50, 0x4E]))?;
         let request = ImageUploadRequest::new(frame);
 
         assert_eq!(&[0x89, 0x50, 0x4E], request.payload());
-        assert_eq!(Duration::from_millis(20), request.per_fragment_delay());
-        assert_eq!(Duration::from_secs(5), request.ack_timeout());
         assert_eq!(MediaHeaderTail::default(), request.media_header_tail());
         Ok(())
     }

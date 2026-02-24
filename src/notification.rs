@@ -143,7 +143,7 @@ pub enum NotificationDecodeError {
 }
 
 /// Decodes raw `fa03` notification payloads into typed events.
-pub struct NotificationHandler;
+pub(crate) struct NotificationHandler;
 
 impl NotificationHandler {
     /// Decodes one notification payload.

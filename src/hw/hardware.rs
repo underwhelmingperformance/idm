@@ -15,6 +15,7 @@ use super::model::{
 };
 use super::model_overrides::ModelResolutionConfig;
 use super::profile::DeviceProfile;
+use super::session::chunk_sizer::AdaptiveChunkSizer;
 use crate::error::InteractionError;
 use crate::notification::{NotificationDecodeError, NotificationHandler, NotifyEvent};
 use crate::protocol::EndpointId;
@@ -146,32 +147,20 @@ impl<T: BleTransport> SessionHandler<T> {
         self,
         name_prefix: &str,
     ) -> Result<DeviceSession, InteractionError> {
-        const UNUSABLE_WRITE_WITHOUT_RESPONSE_LIMIT: usize = 20;
-
         let session = self.transport.connect_first_matching(name_prefix).await?;
-        let fallback = session.device_profile().write_without_response_fallback();
-        let reported = session.write_without_response_limit();
-        let baseline = match reported {
-            Some(limit) if limit > UNUSABLE_WRITE_WITHOUT_RESPONSE_LIMIT => limit,
-            _ => fallback,
-        };
-        let adaptive_initial = if baseline <= crate::protocol::TRANSPORT_CHUNK_FALLBACK {
-            crate::protocol::TRANSPORT_CHUNK_MTU_READY
-        } else {
-            baseline.min(crate::protocol::TRANSPORT_CHUNK_MTU_READY)
-        };
-
+        let resolved_chunk_sizer = super::session::resolve_chunk_sizer(&*session);
         let profile = session.device_profile();
         let span = Span::current();
         tracing::record_all!(
             span,
-            reported_write_without_response_limit = ?reported,
-            profile_write_chunk_fallback = fallback,
-            baseline_transport_chunk_limit = baseline,
-            adaptive_transport_chunk_limit_initial = adaptive_initial,
+            reported_write_without_response_limit =
+                ?resolved_chunk_sizer.reported_write_without_response_limit,
+            profile_write_chunk_fallback = resolved_chunk_sizer.profile_write_chunk_fallback,
+            baseline_transport_chunk_limit = resolved_chunk_sizer.baseline_transport_chunk_limit,
+            adaptive_transport_chunk_limit_initial =
+                resolved_chunk_sizer.adaptive_transport_chunk_limit_initial,
             device_id = %session.device().device_id_display()
         );
-
         if let Some(led_type) = profile.led_type() {
             span.record("led_type", u64::from(led_type));
         }
@@ -182,8 +171,10 @@ impl<T: BleTransport> SessionHandler<T> {
                 panel_height = panel_dimensions.height()
             );
         }
-
-        Ok(DeviceSession { session })
+        Ok(DeviceSession {
+            session,
+            chunk_sizer: resolved_chunk_sizer.chunk_sizer,
+        })
     }
 }
 
@@ -282,8 +273,10 @@ impl HardwareClient for FakeHardwareClient {
 }
 
 /// A connected iDotMatrix session.
+#[derive(Clone)]
 pub struct DeviceSession {
-    session: Arc<dyn ConnectedBleSession>,
+    pub(super) session: Arc<dyn ConnectedBleSession>,
+    pub(super) chunk_sizer: Arc<AdaptiveChunkSizer>,
 }
 
 /// One typed notification item emitted by [`DeviceSession::notification_stream`].
@@ -477,21 +470,6 @@ impl DeviceSession {
         endpoint: EndpointId,
     ) -> Result<Option<Vec<u8>>, InteractionError> {
         self.session.read_endpoint_optional(endpoint).await
-    }
-
-    /// Writes one payload to an endpoint.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the endpoint is unavailable or the write fails.
-    #[instrument(skip(self, payload), level = "trace", fields(?endpoint, ?mode, payload_len = payload.len()))]
-    pub async fn write_endpoint(
-        &self,
-        endpoint: EndpointId,
-        payload: &[u8],
-        mode: WriteMode,
-    ) -> Result<(), InteractionError> {
-        self.session.write_endpoint(endpoint, payload, mode).await
     }
 
     /// Subscribes to endpoint notifications.
@@ -698,6 +676,7 @@ mod tests {
                     Some(-42),
                 ),
             }),
+            chunk_sizer: Arc::new(AdaptiveChunkSizer::from_baseline(512)),
         };
 
         let result = session.close().await;

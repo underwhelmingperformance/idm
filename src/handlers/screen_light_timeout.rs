@@ -6,7 +6,7 @@ use tokio_stream::StreamExt;
 use tokio_util::sync::CancellationToken;
 use tracing::instrument;
 
-use crate::error::{InteractionError, ProtocolError};
+use crate::error::ProtocolError;
 use crate::hw::diagnostics::{DiagnosticRow, DiagnosticSectionSnapshot};
 use crate::hw::{DeviceSession, WriteMode};
 use crate::notification::NotifyEvent;
@@ -202,10 +202,8 @@ impl ScreenLightTimeoutHandler {
         session: &DeviceSession,
         query: &[u8],
         mode: WriteMode,
-    ) -> Result<ProbeStep, InteractionError> {
-        session
-            .write_endpoint(EndpointId::WriteCharacteristic, query, mode)
-            .await?;
+    ) -> Result<ProbeStep, ProtocolError> {
+        session.write(query, mode).await?;
         match timeout(
             SCREEN_LIGHT_QUERY_TIMEOUT,
             session.read_endpoint_optional(EndpointId::ReadNotifyCharacteristic),
@@ -220,7 +218,7 @@ impl ScreenLightTimeoutHandler {
                 }
             }
             Ok(Ok(None)) => Ok(ProbeStep::NoResponse),
-            Ok(Err(error)) => Err(error),
+            Ok(Err(error)) => Err(error.into()),
             Err(_elapsed) => Ok(ProbeStep::NoResponse),
         }
     }
@@ -229,14 +227,12 @@ impl ScreenLightTimeoutHandler {
         session: &DeviceSession,
         query: &[u8],
         mode: WriteMode,
-    ) -> Result<NotifyProbeStep, InteractionError> {
+    ) -> Result<NotifyProbeStep, ProtocolError> {
         let cancel = CancellationToken::new();
         let mut stream = session
             .notification_stream(EndpointId::ReadNotifyCharacteristic, None, cancel)
             .await?;
-        session
-            .write_endpoint(EndpointId::WriteCharacteristic, query, mode)
-            .await?;
+        session.write(query, mode).await?;
 
         let deadline = tokio::time::Instant::now() + SCREEN_LIGHT_QUERY_TIMEOUT;
         loop {
@@ -251,7 +247,7 @@ impl ScreenLightTimeoutHandler {
                         return Ok(NotifyProbeStep::Parsed(timeout_value));
                     }
                 }
-                Ok(Some(Err(error))) => return Err(error),
+                Ok(Some(Err(error))) => return Err(error.into()),
                 Ok(None) | Err(_) => return Ok(NotifyProbeStep::NoResponse),
             }
         }
@@ -333,7 +329,7 @@ impl ScreenLightTimeoutHandler {
             ));
         }
         if let Some(error) = first_transport_error {
-            return Err(error.into());
+            return Err(error);
         }
 
         Ok(ScreenLightTimeoutProbe::unresolved(
@@ -366,11 +362,8 @@ impl ScreenLightTimeoutHandler {
         let mut first_error = None;
 
         for mode in [WriteMode::WithoutResponse, WriteMode::WithResponse] {
-            match session
-                .write_endpoint(EndpointId::WriteCharacteristic, &frame, mode)
-                .await
-            {
-                Ok(()) => return Ok(()),
+            match session.write(&frame, mode).await {
+                Ok(_stats) => return Ok(()),
                 Err(error) => {
                     if first_error.is_none() {
                         first_error = Some(error);
@@ -380,7 +373,7 @@ impl ScreenLightTimeoutHandler {
         }
 
         match first_error {
-            Some(error) => Err(error.into()),
+            Some(error) => Err(error),
             None => Ok(()),
         }
     }

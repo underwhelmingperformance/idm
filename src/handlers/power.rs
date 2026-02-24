@@ -1,6 +1,5 @@
 use crate::error::ProtocolError;
 use crate::hw::{DeviceSession, WriteMode};
-use crate::protocol::EndpointId;
 use tracing::instrument;
 
 use super::{FrameCodec, FrameCodecError};
@@ -51,13 +50,7 @@ impl PowerHandler {
         power: ScreenPower,
     ) -> Result<(), ProtocolError> {
         let frame = Self::frame_for(power)?;
-        session
-            .write_endpoint(
-                EndpointId::WriteCharacteristic,
-                &frame,
-                WriteMode::WithoutResponse,
-            )
-            .await?;
+        session.write(&frame, WriteMode::WithoutResponse).await?;
         Ok(())
     }
 }
