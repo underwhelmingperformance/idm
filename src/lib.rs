@@ -1,5 +1,6 @@
 mod app;
 mod cli;
+pub mod diy;
 mod error;
 mod handlers;
 mod hw;

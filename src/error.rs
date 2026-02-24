@@ -1,6 +1,7 @@
 use derive_more::From;
 use thiserror::Error;
 
+use crate::diy::Error as DiyError;
 use crate::handlers::{
     BrightnessError, FrameCodecError, GifUploadError, ImageUploadError, TextUploadError,
     UploadAckError,
@@ -99,6 +100,9 @@ pub enum ProtocolError {
     #[error(transparent)]
     #[from(ImageUploadError, Box<ImageUploadError>)]
     ImageUpload(Box<ImageUploadError>),
+    #[error(transparent)]
+    #[from(DiyError, Box<DiyError>)]
+    Diy(Box<DiyError>),
     #[error(transparent)]
     #[from(UploadAckError, Box<UploadAckError>)]
     UploadAck(Box<UploadAckError>),

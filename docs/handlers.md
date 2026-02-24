@@ -318,9 +318,8 @@ Behaviour:
   matching the vendor implementation.
 - Compute CRC32 over logical text payload.
 - Chunk at protocol size and then transport size.
-- Use notification-driven pacing with fallback timeout policy.
-- In notify-ack mode, pacing waits on per-block acknowledgements without a fixed
-  inter-fragment delay.
+- Use notification-driven pacing via `write_with_ack()`: each protocol-level
+  chunk waits for one device acknowledgement before the next is sent.
 - Consume typed notification events from the session API rather than decoding
   raw notify payload bytes in handler code.
 - CLI wired: `idm control text <text>`.
@@ -337,7 +336,8 @@ Protocol references:
 
 - [GIF upload](./protocol.md#gif-upload)
 - [Shared media tail byte pattern](./protocol.md#shared-media-tail-byte-pattern-gif-image-text)
-- [Transfer family ACK patterns](./protocol.md#transfer-family-ack-patterns) (GIF)
+- [Transfer family ACK patterns](./protocol.md#transfer-family-ack-patterns)
+  (GIF)
 
 Behaviour:
 
@@ -345,21 +345,22 @@ Behaviour:
 - Emit 16-byte GIF headers with proper flags/CRC and typed media-tail bytes
   (`MediaHeaderTail`).
 - Top-level `image` preprocessing now normalises uploaded GIF payloads for panel
-  compatibility:
-  panel-native GIFs (`width`/`height` already match active panel geometry) are
-  preserved byte-for-byte; non-native GIFs are transformed with frame count
-  capped at `64`, per-frame delay clamped to at least `10 ms`, source frames
-  composited with GIF disposal semantics before resizing, transparency flattened
-  against black, encoded disposal set to `DisposalBackground`, and re-encoded
-  with one shared global palette (no per-frame local colour tables) to avoid
-  frame-to-frame palette drift/flicker while remaining protocol-compatible.
+  compatibility: panel-native GIFs (`width`/`height` already match active panel
+  geometry) are preserved byte-for-byte; non-native GIFs are transformed with
+  frame count capped at `64`, per-frame delay clamped to at least `10 ms`,
+  source frames composited with GIF disposal semantics before resizing,
+  transparency flattened against black, encoded disposal set to
+  `DisposalBackground`, and re-encoded with one shared global palette (no
+  per-frame local colour tables) to avoid frame-to-frame palette drift/flicker
+  while remaining protocol-compatible.
 - Accept only syntactically valid GIF payloads via typed `GifAnimation`.
 - When device panel dimensions are known, reject GIFs whose logical screen
   dimensions differ.
 - Top-level `image` command detects GIF input and routes to this handler.
 - Use notification-driven flow control.
-- Default transport pacing uses `20 ms` per transport fragment; callers may
-  override the delay.
+- Transport pacing is handled by the session: `20 ms` inter-fragment delay and
+  `5 s` ack timeout are baked into `DeviceSession::write()` /
+  `write_with_ack()`.
 - Transport chunk sizing uses adaptive probing: start from MTU-ready size
   (`509`) when session metadata only has fallback, then halve on write failure
   until success, floored at `18`.
@@ -398,8 +399,9 @@ Behaviour:
 - Keep file/container decoding and resize/rotation outside this handler.
 - Align tail bytes to target firmware behaviour via typed `MediaHeaderTail`.
 - Reuse chunker and flow-control primitives from GIF handler.
-- Default transport pacing uses `20 ms` per transport fragment; callers may
-  override the delay.
+- Transport pacing is handled by the session: `20 ms` inter-fragment delay and
+  `5 s` ack timeout are baked into `DeviceSession::write()` /
+  `write_with_ack()`.
 - Transport chunk sizing uses adaptive probing: start from MTU-ready size
   (`509`) when session metadata only has fallback, then halve on write failure
   until success, floored at `18`.
@@ -454,7 +456,7 @@ Behaviour:
 
 ## DIY Upload Handler (Raw RGB)
 
-Status: `TODO`  
+Status: `DONE`  
 Priority: `P1`
 
 Protocol references:
@@ -462,7 +464,8 @@ Protocol references:
 - [DIY raw RGB upload](./protocol.md#diy-raw-rgb-upload)
 - [Display-intent payload semantics](./protocol.md#display-intent-payload-semantics)
 - [DIY raw-image frame](./protocol.md#diy-raw-image-frame-9-byte-header)
-- [Transfer family ACK patterns](./protocol.md#transfer-family-ack-patterns) (DIY)
+- [Transfer family ACK patterns](./protocol.md#transfer-family-ack-patterns)
+  (DIY)
 
 Behaviour:
 
@@ -470,6 +473,16 @@ Behaviour:
 - Upload RGB888 framebuffer payload with 9-byte DIY per-chunk prefix.
 - Reject payloads whose byte length does not match active panel geometry.
 - Support mode reset/exit behaviour after completion.
+
+Notes:
+
+- Implemented as `idm::diy` with typed request/receipt/error types.
+- Uses shared adaptive transport chunking and family-specific ACK handling
+  (`TransferFamily::Diy`).
+- Exposes reusable streaming uploads via `diy::Session`, plus typed mode handles
+  for draw/movement runtime commands.
+- Exits DIY mode after successful upload by default; can be disabled via request
+  flag for debugging workflows.
 
 ## Clock Style Handler
 
@@ -570,11 +583,8 @@ Behaviour:
 
 ## Screen Light Timeout Handler
 
-Status: `TODO`  
-Priority: `P1`  
-Comment: Expanded scope on `2026-02-16`. Query/readback (`05 00 0F 80 FF` ->
-`05 00 0F 80 <value>`) is confirmed; implementation must expose typed readback,
-not set-only writes.
+Status: `DONE`  
+Priority: `P1`
 
 Protocol reference: [Device/common control](./protocol.md#devicecommon-control)
 (Screen-light timeout set/read)
@@ -583,6 +593,8 @@ Behaviour:
 
 - Implement set/read screen-light timeout commands.
 - Parse readback response and expose typed duration.
+- Prefer readback when available and fall back to notify-based probing.
+- Surface probe outcome, attempted write modes, and last invalid payload.
 
 ## Readback Capability Handler
 
@@ -683,7 +695,8 @@ Protocol references:
 - [OTA transfer protocol](./protocol.md#ota-transfer-protocol)
 - [OTA data frame](./protocol.md#ota-data-frame)
 - [OTA setup command](./protocol.md#ota-setup-command)
-- [Transfer family ACK patterns](./protocol.md#transfer-family-ack-patterns) (OTA)
+- [Transfer family ACK patterns](./protocol.md#transfer-family-ack-patterns)
+  (OTA)
 
 Behaviour:
 
@@ -722,7 +735,8 @@ Behaviour:
 
 ## Cross-cutting requirements
 
-- All transfer handlers SHOULD share a common chunking/pacing engine.
+- All transfer handlers SHOULD share the session-level pacing (via
+  `DeviceSession::write()` / `write_with_ack()`) and adaptive chunking engine.
 - Timeout policy MUST be configurable per transfer family.
 - Handler APIs SHOULD return structured receipts with status family and final
   response payload.

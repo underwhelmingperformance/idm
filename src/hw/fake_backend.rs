@@ -37,6 +37,9 @@ const GIF_COMMAND_ID: u8 = 0x01;
 const IMAGE_COMMAND_ID: u8 = 0x02;
 const TEXT_COMMAND_ID: u8 = 0x03;
 const COMMAND_NS: u8 = 0x00;
+const DIY_PREFIX_HEADER_LEN: usize = 9;
+const MEDIA_HEADER_LEN: usize = 16;
+const DIY_LOGICAL_CHUNK_MAX_PAYLOAD_LEN: usize = 4096;
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 struct NotificationCode {
@@ -620,6 +623,7 @@ struct FakeProtocolState {
     gif_progress: TransferProgress,
     image_progress: TransferProgress,
     text_progress: TransferProgress,
+    diy_progress: TransferProgress,
 }
 
 impl FakeProtocolState {
@@ -631,6 +635,7 @@ impl FakeProtocolState {
             gif_progress: TransferProgress::default(),
             image_progress: TransferProgress::default(),
             text_progress: TransferProgress::default(),
+            diy_progress: TransferProgress::default(),
         }
     }
 
@@ -639,6 +644,7 @@ impl FakeProtocolState {
             TransferFamily::Gif => self.gif.action_for(header.phase),
             TransferFamily::Image => self.image.action_for(header.phase),
             TransferFamily::Text => self.text.action_for(header.phase),
+            TransferFamily::Diy => default_ack_action(header.phase),
             _ => AckAction::NoAck,
         }
     }
@@ -822,12 +828,38 @@ impl FakeDeviceSession {
     }
 
     fn parse_transfer_header(&self, payload: &[u8]) -> Option<ParsedTransferHeader> {
-        if payload.len() < 16 {
+        if payload.len() >= DIY_PREFIX_HEADER_LEN && payload[2] == 0x00 && payload[3] == 0x00 {
+            let declared_len = u16::from_le_bytes([payload[0], payload[1]]) as usize;
+            if declared_len < DIY_PREFIX_HEADER_LEN {
+                return None;
+            }
+
+            let chunk_flag = HeaderChunkFlag::try_from(payload[4]).ok()?;
+            let chunk_payload_len_usize = declared_len - DIY_PREFIX_HEADER_LEN;
+            if chunk_payload_len_usize > DIY_LOGICAL_CHUNK_MAX_PAYLOAD_LEN {
+                return None;
+            }
+            let chunk_payload_len = u16::try_from(chunk_payload_len_usize).ok()?;
+            let payload_len = u32::from_le_bytes([payload[5], payload[6], payload[7], payload[8]]);
+
+            let phase = self
+                .protocol_state
+                .lock()
+                .expect("protocol mutex poisoned")
+                .diy_progress
+                .observe(chunk_flag, chunk_payload_len, payload_len);
+            return Some(ParsedTransferHeader {
+                family: TransferFamily::Diy,
+                phase,
+            });
+        }
+
+        if payload.len() < MEDIA_HEADER_LEN {
             return None;
         }
 
         let declared_len = u16::from_le_bytes([payload[0], payload[1]]) as usize;
-        if declared_len < 16 {
+        if declared_len < MEDIA_HEADER_LEN {
             return None;
         }
 
@@ -835,28 +867,26 @@ impl FakeDeviceSession {
         let family = TransferFamily::from(command);
 
         let chunk_flag = HeaderChunkFlag::try_from(payload[4]).ok()?;
-        let chunk_payload_len = u16::try_from(declared_len - 16).ok()?;
+        let chunk_payload_len = u16::try_from(declared_len - MEDIA_HEADER_LEN).ok()?;
         let payload_len = u32::from_le_bytes([payload[5], payload[6], payload[7], payload[8]]);
 
+        let mut protocol_state = self.protocol_state.lock().expect("protocol mutex poisoned");
         let phase = match family {
-            TransferFamily::Gif => self
-                .protocol_state
-                .lock()
-                .expect("protocol mutex poisoned")
-                .gif_progress
-                .observe(chunk_flag, chunk_payload_len, payload_len),
-            TransferFamily::Image => self
-                .protocol_state
-                .lock()
-                .expect("protocol mutex poisoned")
-                .image_progress
-                .observe(chunk_flag, chunk_payload_len, payload_len),
-            TransferFamily::Text => self
-                .protocol_state
-                .lock()
-                .expect("protocol mutex poisoned")
-                .text_progress
-                .observe(chunk_flag, chunk_payload_len, payload_len),
+            TransferFamily::Gif => {
+                protocol_state
+                    .gif_progress
+                    .observe(chunk_flag, chunk_payload_len, payload_len)
+            }
+            TransferFamily::Image => {
+                protocol_state
+                    .image_progress
+                    .observe(chunk_flag, chunk_payload_len, payload_len)
+            }
+            TransferFamily::Text => {
+                protocol_state
+                    .text_progress
+                    .observe(chunk_flag, chunk_payload_len, payload_len)
+            }
             _ => return None,
         };
 

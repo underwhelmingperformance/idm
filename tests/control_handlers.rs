@@ -29,6 +29,16 @@ fn image_request_64x64() -> anyhow::Result<idm::ImageUploadRequest> {
     Ok(idm::ImageUploadRequest::new(frame))
 }
 
+fn diy_request_64x64() -> anyhow::Result<idm::diy::UploadRequest> {
+    let dimensions = idm::PanelDimensions::new(64, 64).expect("64x64 should be valid");
+    let mut payload = Vec::with_capacity(64 * 64 * 3);
+    for _ in 0..(64 * 64) {
+        payload.extend_from_slice(&[0x33, 0x22, 0x11]);
+    }
+    let frame = idm::Rgb888Frame::try_from((dimensions, payload))?;
+    Ok(idm::diy::UploadRequest::new(frame))
+}
+
 fn stream_closed_listen_scenario() -> idm::ListenScenario {
     idm::ListenScenario::builder()
         .stream_behaviour(idm::ListenStreamBehaviour::CloseAfterInitialNotifications)
@@ -77,6 +87,64 @@ async fn control_handlers_apply_commands_against_fake_session() -> anyhow::Resul
     Ok(())
 }
 
+#[tokio::test]
+async fn screen_light_timeout_handler_reads_timeout_from_fake_readback() -> anyhow::Result<()> {
+    let fake_args = idm::FakeArgs::builder()
+        .scan("hci0|AA:BB:CC|IDM-Clock|-43")?
+        .initial_read("05000F801E")?
+        .build();
+    let client = idm::fake_hardware_client(fake_args);
+    let session = client.connect_first_device("IDM-").await?;
+
+    let probe = idm::ScreenLightTimeoutHandler::read_timeout(&session).await?;
+
+    assert_eq!(Some(30), probe.timeout());
+    assert_eq!(
+        idm::ScreenLightTimeoutProbeOutcome::ParsedRead,
+        probe.outcome()
+    );
+    assert_eq!(
+        ["without_response:read_screen_light_read".to_string()],
+        probe.write_modes_attempted()
+    );
+    assert_eq!(None, probe.last_payload());
+
+    session.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn screen_light_timeout_handler_reports_invalid_readback_payload() -> anyhow::Result<()> {
+    let fake_args = idm::FakeArgs::builder()
+        .scan("hci0|AA:BB:CC|IDM-Clock|-43")?
+        .initial_read("0500010001")?
+        .build();
+    let client = idm::fake_hardware_client(fake_args);
+    let session = client.connect_first_device("IDM-").await?;
+
+    let probe = idm::ScreenLightTimeoutHandler::read_timeout(&session).await?;
+
+    assert_eq!(None, probe.timeout());
+    assert_eq!(
+        idm::ScreenLightTimeoutProbeOutcome::InvalidResponse,
+        probe.outcome()
+    );
+    assert_eq!(
+        [
+            "without_response:read_screen_light_read".to_string(),
+            "with_response:read_screen_light_read".to_string()
+        ],
+        probe.write_modes_attempted()
+    );
+    assert_eq!(
+        Some(&[0x05, 0x00, 0x01, 0x00, 0x01][..]),
+        probe.last_payload()
+    );
+
+    session.close().await?;
+    Ok(())
+}
+
 #[test]
 fn brightness_rejects_values_outside_range() {
     let result = idm::Brightness::new(101);
@@ -117,9 +185,6 @@ async fn text_upload_handler_supports_notify_ack_pacing() -> anyhow::Result<()> 
 
     let request = idm::TextUploadRequest::builder()
         .text("Hi".to_string())
-        .pacing(idm::UploadPacing::NotifyAck {
-            timeout: Duration::from_millis(250),
-        })
         .build();
     let receipt = idm::TextUploadHandler::upload(&session, request).await?;
 
@@ -221,8 +286,8 @@ async fn text_upload_handler_times_out_when_ack_is_missing() -> anyhow::Result<(
 
     assert_matches!(
         result,
-        Err(idm::ProtocolError::TextUpload(error))
-            if matches!(*error, idm::TextUploadError::NotifyAckTimeout { .. })
+        Err(idm::ProtocolError::UploadAck(error))
+            if matches!(*error, idm::UploadAckError::Timeout { .. })
     );
     session.close().await?;
     Ok(())
@@ -237,18 +302,13 @@ async fn text_upload_handler_surfaces_stream_closure_as_missing_ack() -> anyhow:
     let client = idm::fake_hardware_client(fake_args);
     let session = client.connect_first_device("IDM-").await?;
 
-    let request = idm::TextUploadRequest::builder()
-        .text("Hi".to_string())
-        .pacing(idm::UploadPacing::NotifyAck {
-            timeout: Duration::from_millis(50),
-        })
-        .build();
+    let request = idm::TextUploadRequest::new("Hi");
     let result = idm::TextUploadHandler::upload(&session, request).await;
 
     assert_matches!(
         result,
-        Err(idm::ProtocolError::TextUpload(error))
-            if matches!(*error, idm::TextUploadError::MissingNotifyAck)
+        Err(idm::ProtocolError::UploadAck(error))
+            if matches!(*error, idm::UploadAckError::MissingAck)
     );
 
     session.close().await?;
@@ -261,24 +321,19 @@ async fn text_upload_handler_rejects_unexpected_ack_event() -> anyhow::Result<()
         .scan("hci0|AA:BB:CC|IDM-Clock|-43")?
         .listen(stale_listen_scenario(
             idm::NotifyEvent::NextPackage(idm::TransferFamily::Gif),
-            1,
+            9,
         ))
         .build();
     let client = idm::fake_hardware_client(fake_args);
     let session = client.connect_first_device("IDM-").await?;
 
-    let request = idm::TextUploadRequest::builder()
-        .text("Hi".to_string())
-        .pacing(idm::UploadPacing::NotifyAck {
-            timeout: Duration::from_millis(50),
-        })
-        .build();
+    let request = idm::TextUploadRequest::new("Hi");
     let result = idm::TextUploadHandler::upload(&session, request).await;
 
     assert_matches!(
         result,
-        Err(idm::ProtocolError::TextUpload(error))
-            if matches!(*error, idm::TextUploadError::UnexpectedNotifyEvent)
+        Err(idm::ProtocolError::UploadAck(error))
+            if matches!(*error, idm::UploadAckError::UnexpectedEvent)
     );
 
     session.close().await?;
@@ -603,6 +658,115 @@ async fn image_upload_handler_surfaces_last_chunk_rejection() -> anyhow::Result<
         result,
         Err(idm::ProtocolError::UploadAck(error))
             if matches!(*error, idm::UploadAckError::TransferRejected { status: 0x0B })
+    );
+
+    session.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn diy_upload_handler_writes_expected_payload_size() -> anyhow::Result<()> {
+    let fake_args = idm::FakeArgs::builder().scan(FAKE_SCAN_64X64)?.build();
+    let client = idm::fake_hardware_client(fake_args);
+    let session = client.connect_first_device("IDM-").await?;
+
+    let receipt = idm::diy::upload(&session, diy_request_64x64()?).await?;
+
+    assert_eq!(12315, receipt.bytes_written());
+    assert_eq!(27, receipt.chunks_written());
+    assert_eq!(3, receipt.logical_chunks_sent());
+
+    session.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn diy_upload_handler_surfaces_stream_closure_as_missing_ack() -> anyhow::Result<()> {
+    let fake_args = idm::FakeArgs::builder()
+        .scan(FAKE_SCAN_64X64)?
+        .listen(stream_closed_listen_scenario())
+        .build();
+    let client = idm::fake_hardware_client(fake_args);
+    let session = client.connect_first_device("IDM-").await?;
+
+    let result = idm::diy::upload(&session, diy_request_64x64()?).await;
+
+    assert_matches!(
+        result,
+        Err(idm::ProtocolError::UploadAck(error))
+            if matches!(*error, idm::UploadAckError::MissingAck)
+    );
+
+    session.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn diy_upload_handler_rejects_unexpected_ack_event() -> anyhow::Result<()> {
+    let fake_args = idm::FakeArgs::builder()
+        .scan(FAKE_SCAN_64X64)?
+        .listen(stale_listen_scenario(
+            idm::NotifyEvent::NextPackage(idm::TransferFamily::Text),
+            9,
+        ))
+        .build();
+    let client = idm::fake_hardware_client(fake_args);
+    let session = client.connect_first_device("IDM-").await?;
+
+    let result = idm::diy::upload(&session, diy_request_64x64()?).await;
+
+    assert_matches!(
+        result,
+        Err(idm::ProtocolError::UploadAck(error))
+            if matches!(*error, idm::UploadAckError::UnexpectedEvent)
+    );
+
+    session.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn diy_upload_handler_surfaces_device_rejection_status() -> anyhow::Result<()> {
+    let fake_args = idm::FakeArgs::builder()
+        .scan(FAKE_SCAN_64X64)?
+        .listen(stale_listen_scenario(
+            idm::NotifyEvent::Error(idm::TransferFamily::Diy, 0x09),
+            9,
+        ))
+        .build();
+    let client = idm::fake_hardware_client(fake_args);
+    let session = client.connect_first_device("IDM-").await?;
+
+    let result = idm::diy::upload(&session, diy_request_64x64()?).await;
+
+    assert_matches!(
+        result,
+        Err(idm::ProtocolError::UploadAck(error))
+            if matches!(*error, idm::UploadAckError::TransferRejected { status: 0x09 })
+    );
+
+    session.close().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn diy_upload_handler_surfaces_premature_finish() -> anyhow::Result<()> {
+    let fake_args = idm::FakeArgs::builder()
+        .scan(FAKE_SCAN_64X64)?
+        .listen(stale_listen_scenario(
+            idm::NotifyEvent::Finished(idm::TransferFamily::Diy),
+            9,
+        ))
+        .build();
+    let client = idm::fake_hardware_client(fake_args);
+    let session = client.connect_first_device("IDM-").await?;
+
+    let result = idm::diy::upload(&session, diy_request_64x64()?).await;
+
+    assert_matches!(
+        result,
+        Err(idm::ProtocolError::Diy(error))
+            if matches!(*error, idm::diy::Error::PrematureFinish { .. })
     );
 
     session.close().await?;
