@@ -212,15 +212,15 @@ fn write_json_line(out: &mut impl io::Write, value: &impl Serialize) -> Result<(
 }
 
 fn save_preprocessed_gif(path: &Path, payload: &[u8]) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).with_context(|| {
-                format!(
-                    "failed to create parent directory for preprocessed gif `{}`",
-                    path.display()
-                )
-            })?;
-        }
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent).with_context(|| {
+            format!(
+                "failed to create parent directory for preprocessed gif `{}`",
+                path.display()
+            )
+        })?;
     }
     std::fs::write(path, payload).with_context(|| {
         format!(

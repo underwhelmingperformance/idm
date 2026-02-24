@@ -12,6 +12,7 @@ use tracing_subscriber::Layer;
 use tracing_subscriber::filter;
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::fmt;
+use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
@@ -66,6 +67,7 @@ fn initialise_tracing_once(
         let formatting_layer = fmt::layer()
             .pretty()
             .with_target(false)
+            .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
             .with_writer(indicatif_layer.get_stderr_writer());
         let progress_layer = indicatif_layer.with_filter(filter::filter_fn(progress_span_filter));
 
@@ -80,6 +82,7 @@ fn initialise_tracing_once(
                 fmt::layer()
                     .json()
                     .with_target(false)
+                    .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
                     .with_writer(io::stderr)
                     .with_filter(log_filter.clone()),
             )
