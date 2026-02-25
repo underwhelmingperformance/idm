@@ -7,12 +7,12 @@ use tokio_util::sync::CancellationToken;
 
 use super::session::{UploadRequest, UploadStats};
 use crate::error::ProtocolError;
-use crate::handlers::upload_common::{UploadAckOutcome, drain_stale_notifications};
-use crate::hw::{DeviceSession, NotificationSubscription, PanelDimensions, WriteMode};
+use crate::handlers::upload_common::drain_stale_notifications;
+use crate::hw::{
+    Ack, DeviceSession, NotificationSubscription, PanelDimensions, SessionWriter, WriteMode,
+};
 use crate::protocol::EndpointId;
 use crate::{DiyPrefixFields, FrameCodec, GifChunkFlag, TransferFamily};
-
-const LOGICAL_CHUNK_SIZE: usize = 4096;
 const DIY_GUARD_DROP_EXIT_TIMEOUT: Duration = Duration::from_millis(250);
 const DIY_GUARD_DROP_WAIT_TIMEOUT: Duration = Duration::from_millis(300);
 
@@ -35,13 +35,6 @@ pub enum DiyError {
     },
     #[error("diy upload chunk size cannot be zero")]
     InvalidChunkSize,
-    #[error(
-        "device reported diy transfer completion too early at chunk {chunk_index} of {total_chunks}"
-    )]
-    PrematureFinish {
-        chunk_index: usize,
-        total_chunks: usize,
-    },
     #[error("diy point list cannot be empty")]
     EmptyPointList,
     #[error("diy point ({x}, {y}) is outside device panel dimensions {panel_dimensions}")]
@@ -228,7 +221,13 @@ impl DiyHandler {
         let span = tracing::Span::current();
         let frame = Self::frame_for_mode(mode)?;
         span.record("frame_len", frame.len());
-        session.write(&frame, WriteMode::WithResponse).await?;
+        SessionWriter::builder()
+            .session(session)
+            .payload(&frame)
+            .ack(Ack::Transport)
+            .build()
+            .send()
+            .await?;
         Ok(())
     }
 
@@ -260,7 +259,13 @@ impl DiyHandler {
         let span = tracing::Span::current();
         let frame = Self::frame_for_runtime(mode, payload)?;
         span.record("frame_len", frame.len());
-        let stats = session.write(&frame, WriteMode::WithResponse).await?;
+        let stats = SessionWriter::builder()
+            .session(session)
+            .payload(&frame)
+            .ack(Ack::Transport)
+            .build()
+            .send()
+            .await?;
         Ok(stats.bytes_written)
     }
 
@@ -276,25 +281,6 @@ impl DiyHandler {
             session: session.clone(),
             stream,
         })
-    }
-
-    fn build_diy_frame_block(
-        logical_chunk: &[u8],
-        chunk_flag: GifChunkFlag,
-        payload_len_u32: u32,
-    ) -> Result<Vec<u8>, ProtocolError> {
-        let chunk_payload_len =
-            u16::try_from(logical_chunk.len()).map_err(|_overflow| DiyError::PayloadTooLarge {
-                payload_len: logical_chunk.len(),
-                max_payload_len: u16::MAX as usize,
-            })?;
-        let fields = DiyPrefixFields::new(chunk_payload_len, chunk_flag, payload_len_u32)?;
-        let prefix = FrameCodec::encode_diy_prefix(fields);
-
-        let mut frame_block = Vec::with_capacity(prefix.len() + logical_chunk.len());
-        frame_block.extend_from_slice(&prefix);
-        frame_block.extend_from_slice(logical_chunk);
-        Ok(frame_block)
     }
 
     /// Uploads one DIY RGB framebuffer, entering and exiting DIY mode around
@@ -350,54 +336,37 @@ impl DiyActiveUploader {
         }
 
         let payload = request.payload();
-        let logical_chunks_total = payload.chunks(LOGICAL_CHUNK_SIZE).count();
-        let payload_len_u32 =
-            u32::try_from(payload.len()).map_err(|_overflow| DiyError::PayloadTooLarge {
-                payload_len: payload.len(),
-                max_payload_len: u32::MAX as usize,
-            })?;
 
-        let mut bytes_written = 0usize;
-        let mut chunks_written = 0usize;
-        let mut logical_chunks_sent = 0usize;
-
-        for (index, logical_chunk) in payload.chunks(LOGICAL_CHUNK_SIZE).enumerate() {
-            let chunk_flag = if index == 0 {
+        let encoder = |chunk: &[u8], index: usize, total_len: u32, _crc: u32| {
+            let flag = if index == 0 {
                 GifChunkFlag::First
             } else {
                 GifChunkFlag::Continuation
             };
-            let frame_block =
-                DiyHandler::build_diy_frame_block(logical_chunk, chunk_flag, payload_len_u32)?;
-            logical_chunks_sent += 1;
+            let chunk_len =
+                u16::try_from(chunk.len()).map_err(|_overflow| DiyError::PayloadTooLarge {
+                    payload_len: chunk.len(),
+                    max_payload_len: u16::MAX as usize,
+                })?;
+            let fields = DiyPrefixFields::new(chunk_len, flag, total_len)?;
+            Ok(FrameCodec::encode_diy_prefix(fields).to_vec())
+        };
 
-            let (fragment_stats, ack_outcome) = session
-                .write_with_ack(
-                    &frame_block,
-                    WriteMode::WithResponse,
-                    &mut self.stream,
-                    TransferFamily::Diy,
-                )
-                .await?;
-            bytes_written += fragment_stats.bytes_written;
-            chunks_written += fragment_stats.chunks_written;
-            if matches!(ack_outcome, UploadAckOutcome::Finished) {
-                let chunk_number = index + 1;
-                if chunk_number < logical_chunks_total {
-                    return Err(DiyError::PrematureFinish {
-                        chunk_index: chunk_number,
-                        total_chunks: logical_chunks_total,
-                    }
-                    .into());
-                }
-                break;
-            }
-        }
+        let stats = SessionWriter::builder()
+            .session(session)
+            .payload(payload)
+            .ack(Ack::Transfer(TransferFamily::Diy))
+            .write_mode(WriteMode::WithResponse)
+            .header(&encoder)
+            .stream(&mut self.stream)
+            .build()
+            .send()
+            .await?;
 
         Ok(UploadStats {
-            bytes_written,
-            chunks_written,
-            logical_chunks_sent,
+            bytes_written: stats.bytes_written,
+            chunks_written: stats.chunks_written,
+            logical_chunks_sent: stats.logical_chunks_sent,
         })
     }
 }

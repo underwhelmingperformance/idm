@@ -1,18 +1,12 @@
 use bon::Builder;
-use crc32fast::hash;
 use idm_macros::progress;
 use thiserror::Error;
-use tokio_util::sync::CancellationToken;
 
-use super::upload_common::{UploadAckOutcome, drain_stale_notifications};
 use crate::error::ProtocolError;
-use crate::hw::{DeviceSession, PanelDimensions, WriteMode};
-use crate::protocol::EndpointId;
+use crate::hw::{Ack, DeviceSession, PanelDimensions, SessionWriter};
 use crate::{
     FrameCodec, GifChunkFlag, ImageHeaderFields, MediaHeaderTail, Rgb888Frame, TransferFamily,
 };
-
-const LOGICAL_CHUNK_SIZE: usize = 4096;
 
 /// Errors returned by image upload operations.
 #[derive(Debug, Error)]
@@ -40,13 +34,6 @@ pub enum ImageUploadError {
     },
     #[error("image upload chunk size cannot be zero")]
     InvalidChunkSize,
-    #[error(
-        "device reported image transfer completion too early at chunk {chunk_index} of {total_chunks}"
-    )]
-    PrematureFinish {
-        chunk_index: usize,
-        total_chunks: usize,
-    },
 }
 
 /// Image upload request parameters.
@@ -268,78 +255,39 @@ impl ImageUploadHandler {
         }
 
         let payload = request.payload();
-        let logical_chunks_total = payload.chunks(LOGICAL_CHUNK_SIZE).count();
-        let crc32 = hash(payload);
-        let payload_len_u32 = u32::try_from(payload.len()).map_err(|_overflow| {
-            ImageUploadError::PayloadTooLarge {
-                payload_len: payload.len(),
-                max_payload_len: u32::MAX as usize,
-            }
-        })?;
-        let endpoint = EndpointId::ReadNotifyCharacteristic;
+        let media_header_tail = request.media_header_tail();
 
-        let mut stream = session
-            .notification_stream(endpoint, None, CancellationToken::new())
-            .await?;
-
-        drain_stale_notifications(&mut stream, "image").await?;
-
-        let mut bytes_written = 0usize;
-        let mut chunks_written = 0usize;
-        let mut logical_chunks_sent = 0usize;
-        progress_set_length!(logical_chunks_total);
-
-        for (index, logical_chunk) in payload.chunks(LOGICAL_CHUNK_SIZE).enumerate() {
-            let chunk_flag = if index == 0 {
+        let encoder = move |chunk: &[u8], index: usize, total_len: u32, crc: u32| {
+            let flag = if index == 0 {
                 GifChunkFlag::First
             } else {
                 GifChunkFlag::Continuation
             };
-            let chunk_payload_len = u16::try_from(logical_chunk.len()).map_err(|_overflow| {
+            let chunk_len = u16::try_from(chunk.len()).map_err(|_overflow| {
                 ImageUploadError::ChunkPayloadTooLarge {
-                    chunk_payload_len: logical_chunk.len(),
+                    chunk_payload_len: chunk.len(),
                     max_payload_len: u16::MAX as usize,
                 }
             })?;
-            let fields =
-                ImageHeaderFields::new(chunk_payload_len, chunk_flag, payload_len_u32, crc32)?;
+            let fields = ImageHeaderFields::new(chunk_len, flag, total_len, crc)?;
             let mut header = FrameCodec::encode_image_header(fields);
-            request.media_header_tail().apply_to_header(&mut header);
+            media_header_tail.apply_to_header(&mut header);
+            Ok(header.to_vec())
+        };
 
-            let mut frame_block = Vec::with_capacity(header.len() + logical_chunk.len());
-            frame_block.extend_from_slice(&header);
-            frame_block.extend_from_slice(logical_chunk);
-            logical_chunks_sent += 1;
+        let stats = SessionWriter::builder()
+            .session(session)
+            .payload(payload)
+            .ack(Ack::Transfer(TransferFamily::Image))
+            .header(&encoder)
+            .build()
+            .send()
+            .await?;
 
-            let (stats, ack_outcome) = session
-                .write_with_ack(
-                    &frame_block,
-                    WriteMode::WithoutResponse,
-                    &mut stream,
-                    TransferFamily::Image,
-                )
-                .await?;
-            bytes_written += stats.bytes_written;
-            chunks_written += stats.chunks_written;
-            progress_inc!();
-            if matches!(ack_outcome, UploadAckOutcome::Finished) {
-                let chunk_number = index + 1;
-                if chunk_number < logical_chunks_total {
-                    return Err(ImageUploadError::PrematureFinish {
-                        chunk_index: chunk_number,
-                        total_chunks: logical_chunks_total,
-                    }
-                    .into());
-                }
-                break;
-            }
-        }
-
-        drop(stream);
         Ok(ImageUploadReceipt::new(
-            bytes_written,
-            chunks_written,
-            logical_chunks_sent,
+            stats.bytes_written,
+            stats.chunks_written,
+            stats.logical_chunks_sent,
         ))
     }
 }

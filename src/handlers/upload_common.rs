@@ -68,6 +68,11 @@ pub enum UploadAckError {
     UnexpectedEvent,
     #[error("transfer was rejected by device status 0x{status:02X}")]
     TransferRejected { status: u8 },
+    #[error("device reported transfer completion at chunk {chunk_index} of {total_chunks}")]
+    PrematureFinish {
+        chunk_index: usize,
+        total_chunks: usize,
+    },
     #[error(transparent)]
     Interaction(#[from] InteractionError),
     #[error(transparent)]

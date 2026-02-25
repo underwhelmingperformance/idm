@@ -432,8 +432,8 @@ async fn gif_upload_handler_surfaces_premature_finish_on_non_final_chunk() -> an
 
     assert_matches!(
         result,
-        Err(idm::ProtocolError::GifUpload(error))
-            if matches!(*error, idm::GifUploadError::PrematureFinish { .. })
+        Err(idm::ProtocolError::UploadAck(error))
+            if matches!(*error, idm::UploadAckError::PrematureFinish { .. })
     );
 
     session.close().await?;
@@ -606,8 +606,8 @@ async fn image_upload_handler_surfaces_premature_finish() -> anyhow::Result<()> 
 
     assert_matches!(
         result,
-        Err(idm::ProtocolError::ImageUpload(error))
-            if matches!(*error, idm::ImageUploadError::PrematureFinish { .. })
+        Err(idm::ProtocolError::UploadAck(error))
+            if matches!(*error, idm::UploadAckError::PrematureFinish { .. })
     );
 
     session.close().await?;
@@ -765,8 +765,8 @@ async fn diy_upload_handler_surfaces_premature_finish() -> anyhow::Result<()> {
 
     assert_matches!(
         result,
-        Err(idm::ProtocolError::Diy(error))
-            if matches!(*error, idm::diy::Error::PrematureFinish { .. })
+        Err(idm::ProtocolError::UploadAck(error))
+            if matches!(*error, idm::UploadAckError::PrematureFinish { .. })
     );
 
     session.close().await?;

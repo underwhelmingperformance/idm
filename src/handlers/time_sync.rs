@@ -2,7 +2,7 @@ use time::OffsetDateTime;
 use tracing::instrument;
 
 use crate::error::ProtocolError;
-use crate::hw::{DeviceSession, WriteMode};
+use crate::hw::{Ack, DeviceSession, SessionWriter};
 
 use super::{FrameCodec, FrameCodecError};
 
@@ -52,7 +52,13 @@ impl TimeSyncHandler {
         timestamp: OffsetDateTime,
     ) -> Result<(), ProtocolError> {
         let frame = Self::frame_for(timestamp)?;
-        session.write(&frame, WriteMode::WithoutResponse).await?;
+        SessionWriter::builder()
+            .session(session)
+            .payload(&frame)
+            .ack(Ack::None)
+            .build()
+            .send()
+            .await?;
         Ok(())
     }
 }

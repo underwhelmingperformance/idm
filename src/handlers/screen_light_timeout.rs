@@ -8,7 +8,7 @@ use tracing::instrument;
 
 use crate::error::ProtocolError;
 use crate::hw::diagnostics::{DiagnosticRow, DiagnosticSectionSnapshot};
-use crate::hw::{DeviceSession, WriteMode};
+use crate::hw::{Ack, DeviceSession, SessionWriter, WriteMode};
 use crate::notification::NotifyEvent;
 use crate::protocol::EndpointId;
 use crate::utils::format_hex;
@@ -198,12 +198,25 @@ impl ScreenLightTimeoutHandler {
         Some(payload[4])
     }
 
+    fn ack_for_mode(mode: WriteMode) -> Ack {
+        match mode {
+            WriteMode::WithoutResponse => Ack::None,
+            WriteMode::WithResponse => Ack::Transport,
+        }
+    }
+
     async fn query_via_read(
         session: &DeviceSession,
         query: &[u8],
         mode: WriteMode,
     ) -> Result<ProbeStep, ProtocolError> {
-        session.write(query, mode).await?;
+        SessionWriter::builder()
+            .session(session)
+            .payload(query)
+            .ack(Self::ack_for_mode(mode))
+            .build()
+            .send()
+            .await?;
         match timeout(
             SCREEN_LIGHT_QUERY_TIMEOUT,
             session.read_endpoint_optional(EndpointId::ReadNotifyCharacteristic),
@@ -232,7 +245,13 @@ impl ScreenLightTimeoutHandler {
         let mut stream = session
             .notification_stream(EndpointId::ReadNotifyCharacteristic, None, cancel)
             .await?;
-        session.write(query, mode).await?;
+        SessionWriter::builder()
+            .session(session)
+            .payload(query)
+            .ack(Self::ack_for_mode(mode))
+            .build()
+            .send()
+            .await?;
 
         let deadline = tokio::time::Instant::now() + SCREEN_LIGHT_QUERY_TIMEOUT;
         loop {
@@ -362,7 +381,14 @@ impl ScreenLightTimeoutHandler {
         let mut first_error = None;
 
         for mode in [WriteMode::WithoutResponse, WriteMode::WithResponse] {
-            match session.write(&frame, mode).await {
+            match SessionWriter::builder()
+                .session(session)
+                .payload(&frame)
+                .ack(Self::ack_for_mode(mode))
+                .build()
+                .send()
+                .await
+            {
                 Ok(_stats) => return Ok(()),
                 Err(error) => {
                     if first_error.is_none() {

@@ -1,20 +1,15 @@
 use bon::Builder;
-use crc32fast::hash;
 use font8x8::UnicodeFonts;
 use idm_macros::progress;
 use thiserror::Error;
-use tokio_util::sync::CancellationToken;
 
 use crate::error::ProtocolError;
-use crate::handlers::upload_common::{UploadAckOutcome, drain_stale_notifications};
-use crate::hw::{DeviceSession, TextPath, WriteMode};
-use crate::protocol::EndpointId;
-use crate::{FrameCodec, Rgb, TransferFamily};
+use crate::hw::{Ack, DeviceSession, SessionWriter, TextPath};
+use crate::{FrameCodec, Rgb, TextHeaderFields, TransferFamily};
 
 use super::FrameCodecError;
 
 const METADATA_LEN: usize = 14;
-const LOGICAL_CHUNK_SIZE: usize = 4096;
 const FONT_BITMAP_WIDTH: usize = 8;
 const FONT_BITMAP_HEIGHT: usize = 8;
 
@@ -29,13 +24,6 @@ pub enum TextUploadError {
     InvalidChunkSize,
     #[error("text upload path is unresolved for this device routing profile")]
     UnresolvedTextPath,
-    #[error(
-        "device reported text transfer completion too early at block {block_index} of {total_blocks}"
-    )]
-    PrematureFinish {
-        block_index: usize,
-        total_blocks: usize,
-    },
 }
 
 /// Text upload rendering options.
@@ -212,48 +200,36 @@ impl TextUploadHandler {
             "starting text upload"
         );
         ensure_text_path_is_resolved(session)?;
-        let frame_blocks = build_upload_blocks(session, &request)?;
+        let payload = build_logical_payload(session, &request)?;
 
-        let mut chunks_written = 0usize;
-        let mut bytes_written = 0usize;
-        let endpoint = EndpointId::ReadNotifyCharacteristic;
+        let encoder = |chunk: &[u8], index: usize, total_len: u32, crc: u32| {
+            let chunk_len = u16::try_from(chunk.len()).map_err(|_overflow| {
+                FrameCodecError::HeaderPayloadTooLarge {
+                    payload_len: u16::MAX,
+                    max_payload_len: u16::MAX - 16,
+                }
+            })?;
+            let fields = TextHeaderFields::new(chunk_len, total_len, crc)?;
+            let mut header = FrameCodec::encode_text_header(fields);
+            if index > 0 {
+                header[4] = 0x02;
+            }
+            Ok(header.to_vec())
+        };
 
-        let mut stream = session
-            .notification_stream(endpoint, None, CancellationToken::new())
+        let stats = SessionWriter::builder()
+            .session(session)
+            .payload(&payload)
+            .ack(Ack::Transfer(TransferFamily::Text))
+            .header(&encoder)
+            .build()
+            .send()
             .await?;
 
-        drain_stale_notifications(&mut stream, "text").await?;
-
-        let total_blocks = frame_blocks.len();
-        progress_set_length!(total_blocks);
-
-        for (index, block) in frame_blocks.iter().enumerate() {
-            let (stats, ack_outcome) = session
-                .write_with_ack(
-                    block,
-                    WriteMode::WithoutResponse,
-                    &mut stream,
-                    TransferFamily::Text,
-                )
-                .await?;
-            bytes_written += stats.bytes_written;
-            chunks_written += stats.chunks_written;
-            progress_inc!();
-            if matches!(ack_outcome, UploadAckOutcome::Finished) {
-                let block_number = index + 1;
-                if block_number < total_blocks {
-                    return Err(TextUploadError::PrematureFinish {
-                        block_index: block_number,
-                        total_blocks,
-                    }
-                    .into());
-                }
-                break;
-            }
-        }
-
-        drop(stream);
-        Ok(UploadReceipt::new(bytes_written, chunks_written))
+        Ok(UploadReceipt::new(
+            stats.bytes_written,
+            stats.chunks_written,
+        ))
     }
 }
 
@@ -280,47 +256,18 @@ fn encoding_context(session: &DeviceSession) -> TextEncodingContext {
     }
 }
 
-fn build_upload_blocks(
+fn build_logical_payload(
     session: &DeviceSession,
     request: &TextUploadRequest,
-) -> Result<Vec<Vec<u8>>, ProtocolError> {
+) -> Result<Vec<u8>, ProtocolError> {
     let context = encoding_context(session);
     let metadata = encode_metadata(&request.text, request.options, context)?;
     let glyph_stream = encode_glyph_stream(&request.text, request.options, context)?;
 
-    let mut logical_payload = Vec::with_capacity(metadata.len() + glyph_stream.len());
-    logical_payload.extend_from_slice(&metadata);
-    logical_payload.extend_from_slice(&glyph_stream);
-
-    let crc32 = hash(&logical_payload);
-    let payload_len_u32 = u32::try_from(logical_payload.len()).map_err(|_overflow| {
-        FrameCodecError::HeaderPayloadTooLarge {
-            payload_len: u16::MAX,
-            max_payload_len: u16::MAX - 16,
-        }
-    })?;
-
-    let mut blocks = Vec::new();
-    for (index, logical_chunk) in logical_payload.chunks(LOGICAL_CHUNK_SIZE).enumerate() {
-        let chunk_len = u16::try_from(logical_chunk.len()).map_err(|_overflow| {
-            FrameCodecError::HeaderPayloadTooLarge {
-                payload_len: u16::MAX,
-                max_payload_len: u16::MAX - 16,
-            }
-        })?;
-        let header_fields = crate::TextHeaderFields::new(chunk_len, payload_len_u32, crc32)?;
-        let mut header = FrameCodec::encode_text_header(header_fields);
-        if index > 0 {
-            header[4] = 0x02;
-        }
-
-        let mut block = Vec::with_capacity(header.len() + logical_chunk.len());
-        block.extend_from_slice(&header);
-        block.extend_from_slice(logical_chunk);
-        blocks.push(block);
-    }
-
-    Ok(blocks)
+    let mut payload = Vec::with_capacity(metadata.len() + glyph_stream.len());
+    payload.extend_from_slice(&metadata);
+    payload.extend_from_slice(&glyph_stream);
+    Ok(payload)
 }
 
 fn encode_metadata(

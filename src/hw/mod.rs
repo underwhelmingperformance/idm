@@ -37,3 +37,4 @@ pub use self::profile::{
 };
 pub use self::scan_model::{AmbiguousShape, ModelProfile, ScanIdentity, ScanModelHandler};
 pub use self::session::GattProfile;
+pub(crate) use self::session::{Ack, SessionWriter};

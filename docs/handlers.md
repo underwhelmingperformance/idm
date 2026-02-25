@@ -318,7 +318,7 @@ Behaviour:
   matching the vendor implementation.
 - Compute CRC32 over logical text payload.
 - Chunk at protocol size and then transport size.
-- Use notification-driven pacing via `write_with_ack()`: each protocol-level
+- Use notification-driven pacing via `SessionWriter`: each protocol-level
   chunk waits for one device acknowledgement before the next is sent.
 - Consume typed notification events from the session API rather than decoding
   raw notify payload bytes in handler code.
@@ -360,7 +360,7 @@ Behaviour:
 - Use notification-driven flow control.
 - Transport pacing is handled by the session: `20 ms` inter-fragment delay and
   `5 s` ack timeout are baked into `DeviceSession::write()` /
-  `write_with_ack()`.
+  `SessionWriter::send()`.
 - Transport chunk sizing uses adaptive probing: start from MTU-ready size
   (`509`) when session metadata only has fallback, then halve on write failure
   until success, floored at `18`.
@@ -377,8 +377,8 @@ Behaviour:
 
 ## Image Upload Handler (Non-DIY)
 
-Status: `DONE`  
-Priority: `P1`  
+Status: `DONE`
+Priority: `P1`
 Comment: Implemented with 4K logical chunking, CRC32 framing, notify ACK pacing,
 and type-safe RGB888 payload validation bound to active panel dimensions.
 
@@ -401,7 +401,7 @@ Behaviour:
 - Reuse chunker and flow-control primitives from GIF handler.
 - Transport pacing is handled by the session: `20 ms` inter-fragment delay and
   `5 s` ack timeout are baked into `DeviceSession::write()` /
-  `write_with_ack()`.
+  `SessionWriter::send()`.
 - Transport chunk sizing uses adaptive probing: start from MTU-ready size
   (`509`) when session metadata only has fallback, then halve on write failure
   until success, floored at `18`.
@@ -736,7 +736,7 @@ Behaviour:
 ## Cross-cutting requirements
 
 - All transfer handlers SHOULD share the session-level pacing (via
-  `DeviceSession::write()` / `write_with_ack()`) and adaptive chunking engine.
+  `DeviceSession::write()` / `SessionWriter::send()`) and adaptive chunking engine.
 - Timeout policy MUST be configurable per transfer family.
 - Handler APIs SHOULD return structured receipts with status family and final
   response payload.
