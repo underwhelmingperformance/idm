@@ -15,5 +15,5 @@ thiserror = "2.0.18"
 
 [dev-dependencies]
 indicatif = "=0.18.4"
-tracing = { version = "0.1.44", features = ["attributes"] }
-tracing-indicatif = "0.3.14"
+tracing = { version = "=0.1.44", features = ["attributes"] }
+tracing-indicatif = "=0.3.14"
