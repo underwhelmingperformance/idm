@@ -7,29 +7,29 @@ edition = "2024"
 anyhow = "1.0.101"
 async-trait = "0.1.89"
 bon = "3.9.0"
-btleplug = "0.11.8"
+btleplug = "0.12.0"
 clap = { version = "4.5.58", features = ["derive"] }
 color_quant = "1.1.0"
 crc32fast = "1.5.0"
 derive_more = { version = "2.1.1", features = ["display", "from", "into"] }
 directories = "6.0.0"
 font8x8 = "0.3.1"
-gif = "0.13.1"
+gif = "0.14.0"
 hex = "0.4.3"
 humantime = "2.3.0"
 idm-macros = { version = "0.1.0", path = "idm-macros" }
 image = "0.25.8"
 indicatif = "0.18.3"
 kamadak-exif = "0.6.1"
-opentelemetry = "0.31.0"
-opentelemetry_sdk = "0.31.0"
+opentelemetry = "0.32.0"
+opentelemetry_sdk = "0.32.0"
 owo-colors = "4.2.3"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 serde_with = { version = "3.16.1", features = ["hex"] }
 strum = "0.28.0"
 strum_macros = "0.28.0"
-tabled = { version = "0.20.0", features = ["ansi"] }
+tabled = { version = "0.21.0", features = ["ansi"] }
 terminal_size = "0.4.3"
 thiserror = "2.0.18"
 time = "0.3.47"
@@ -38,11 +38,11 @@ tokio-stream = { version = "0.1.18", features = ["sync"] }
 tokio-util = "0.7.18"
 tracing = "0.1.44"
 tracing-indicatif = "0.3.14"
-tracing-opentelemetry = "0.32.1"
+tracing-opentelemetry = "0.33.0"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt", "json"] }
 
 [dev-dependencies]
 assert_matches = "=1.5.0"
-insta = "=1.46.3"
+insta = "=1.48.0"
 pretty_assertions = "=1.4.1"
 rstest = "=0.26.1"
