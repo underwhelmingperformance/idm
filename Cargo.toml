@@ -29,7 +29,7 @@ serde_json = "1.0.149"
 serde_with = { version = "3.16.1", features = ["hex"] }
 strum = "0.28.0"
 strum_macros = "0.28.0"
-tabled = { version = "0.21.0", features = ["ansi"] }
+tabled = { version = "0.22.0", features = ["ansi"] }
 terminal_size = "0.4.3"
 thiserror = "2.0.18"
 time = "0.3.47"
