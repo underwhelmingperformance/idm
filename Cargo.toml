@@ -45,4 +45,4 @@ tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt", "jso
 assert_matches = "=1.5.0"
 insta = "=1.48.0"
 pretty_assertions = "=1.4.1"
-rstest = "=0.26.1"
+rstest = "=0.27.0"
