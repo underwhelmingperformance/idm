@@ -38,7 +38,7 @@ tokio-stream = { version = "0.1.18", features = ["sync"] }
 tokio-util = "0.7.18"
 tracing = "0.1.44"
 tracing-indicatif = "0.3.14"
-tracing-opentelemetry = "0.33.0"
+tracing-opentelemetry = "0.34.0"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt", "json"] }
 
 [dev-dependencies]
