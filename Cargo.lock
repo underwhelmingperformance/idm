@@ -261,16 +261,16 @@ dependencies = [
 
 [[package]]
 name = "bluez-async"
-version = "0.8.2"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "84ae4213cc2a8dc663acecac67bbdad05142be4d8ef372b6903abf878b0c690a"
+checksum = "23a32d8f6aedb42c4ec4ed4e39720ee0e807e72c93feb7cd6483f51d08ca1f65"
 dependencies = [
  "bitflags 2.13.2",
  "bluez-generated",
  "dbus",
  "dbus-tokio",
  "futures",
- "itertools",
+ "itertools 0.15.0",
  "log",
  "serde",
  "serde-xml-rs",
@@ -322,9 +322,9 @@ dependencies = [
 
 [[package]]
 name = "btleplug"
-version = "0.13.4"
+version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f48faeeeb43498bf6f58a610cb92e68ac3ebef7dd723963fd172e67f045b058c"
+checksum = "3d836502de731602ea87cbb307065e8feaed4fd10f0855a75b0b87944ee011dc"
 dependencies = [
  "async-trait",
  "bitflags 2.13.2",
@@ -1218,6 +1218,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "itertools"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8b4baf93f58d4425749ca49a51c50ebab072c5df6994d08fed93541c331481dc"
+dependencies = [
+ "either",
+]
+
+[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1977,7 +1986,7 @@ dependencies = [
  "built",
  "cfg-if",
  "interpolate_name",
- "itertools",
+ "itertools 0.14.0",
  "libc",
  "libfuzzer-sys",
  "log",
@@ -2273,9 +2282,9 @@ dependencies = [
 
 [[package]]
 name = "serde_json"
-version = "1.0.151"
+version = "1.0.152"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c841b55ecdae098c80dcae9cf767f6f8a0c2cdb3416bbef72181df4d0fe73f14"
+checksum = "1741ab7a6cc54a03a89b5d563ed60075c277d9e3cfa73ad0c1f23f23974703c6"
 dependencies = [
  "itoa",
  "memchr",
