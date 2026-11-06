@@ -10,7 +10,7 @@ proc-macro = true
 proc-macro-crate = "3.4.0"
 proc-macro2 = "1.0.106"
 quote = "1.0.44"
-syn = { version = "2.0.116", features = ["full"] }
+syn = { version = "3.0.0", features = ["full"] }
 thiserror = "2.0.18"
 
 [dev-dependencies]
